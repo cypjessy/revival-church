@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "259771647280",
+    "project_id": "the-premium-daktari",
+    "storage_bucket": "the-premium-daktari.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:259771647280:android:ec579cccd2152faa2274f5",
+        "android_client_info": {
+          "package_name": "com.faithstream.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "259771647280-7e481c9pugt8imul0mqd6a0g7o4aop21.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBDRfxs1L8ewVg0Ov9bsKiXjHQltRg0UTo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "259771647280-7e481c9pugt8imul0mqd6a0g7o4aop21.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
