@@ -1,15 +1,29 @@
 "use client";
 
+import { useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { useRequireRole } from "@/lib/AuthProvider";
 
 const PUBLIC_ADMIN_PATHS = ["/admin/register"];
+
+function useStatusBar() {
+  useEffect(() => {
+    (async () => {
+      try {
+        const { StatusBar, Style } = await import("@capacitor/status-bar");
+        await StatusBar.setStyle({ style: Style.Dark });
+        await StatusBar.setBackgroundColor({ color: "#0F0F0F" });
+      } catch {}
+    })();
+  }, []);
+}
 
 export default function AdminLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  useStatusBar();
   const pathname = usePathname();
   const isPublicPath = PUBLIC_ADMIN_PATHS.includes(pathname || "");
   const { isAuthorized, isLoading } = useRequireRole("admin");

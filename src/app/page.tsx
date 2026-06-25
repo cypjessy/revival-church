@@ -18,6 +18,9 @@ export default function LoginPage() {
       try {
         const { Keyboard } = await import("@capacitor/keyboard");
         const { App } = await import("@capacitor/app");
+        const { StatusBar, Style } = await import("@capacitor/status-bar");
+        await StatusBar.setStyle({ style: Style.Dark });
+        await StatusBar.setBackgroundColor({ color: "#0F0F0F" });
 
         const showListener = await Keyboard.addListener("keyboardWillShow", (info) => {
           document.body.style.paddingBottom = info.keyboardHeight + "px";
