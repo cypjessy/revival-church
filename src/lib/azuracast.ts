@@ -5,9 +5,11 @@
 // ============================================================
 
 export function getStationId(): string {
-  if (typeof process !== "undefined" && process.env?.NEXT_PUBLIC_STATION_ID)
-    return process.env.NEXT_PUBLIC_STATION_ID;
-  return "";
+  try {
+    return process.env.NEXT_PUBLIC_STATION_ID || "";
+  } catch {
+    return "";
+  }
 }
 
 const STATION_ID = getStationId();
