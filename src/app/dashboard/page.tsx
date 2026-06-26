@@ -220,7 +220,7 @@ function RotatingGallery({
     <section className="feed-section">
       <div className="section-header-inline">
         <h2 className="section-title">Photo Gallery <span className="section-title-badge">{validAlbums.length} albums</span></h2>
-              <button className="section-link" onClick={() => window.location.href = "/gallery"}>View All <i className="fas fa-chevron-right"></i></button>
+              <button className="section-link" onClick={() => router.push("/gallery")}>View All <i className="fas fa-chevron-right"></i></button>
       </div>
 
       {/* Hero slideshow — large auto-playing banner */}
@@ -576,7 +576,7 @@ export default function DashboardPage() {
                 {stationName} · {listeners} listening
               </div>
             </div>
-          </div>              <button className="live-banner-btn" onClick={() => { setIsPlaying(true); window.location.href = "/radio"; }}>
+          </div>              <button className="live-banner-btn" onClick={() => { setIsPlaying(true); router.push("/radio"); }}>
             <i className="fas fa-play"></i> Tune In Now
           </button>
         </div>
@@ -584,7 +584,7 @@ export default function DashboardPage() {
 
       {/* LIVE BANNER — YouTube */}
       {ytLive.status.isLive && (
-        <div className="live-banner" style={{ borderLeftColor: "#FF0000" }} onClick={() => window.location.href = "/watch"}>
+        <div className="live-banner" style={{ borderLeftColor: "#FF0000" }} onClick={() => router.push("/watch")}>
           <div className="live-banner-left">
             <div className="live-banner-dot" style={{ background: "#FF0000" }}></div>
             <div className="live-banner-info">
@@ -596,7 +596,7 @@ export default function DashboardPage() {
               </div>
             </div>
           </div>
-          <button className="live-banner-btn" onClick={(e) => { e.stopPropagation(); window.location.href = "/watch"; }}>
+          <button className="live-banner-btn" onClick={(e) => { e.stopPropagation(); router.push("/watch"); }}>
             <i className="fas fa-play"></i> Watch Now
           </button>
         </div>
@@ -606,7 +606,7 @@ export default function DashboardPage() {
       <section className="feed-section">
         <div className="section-header-inline">
           <h2 className="section-title">Live Radio</h2>
-          <button className="section-link" onClick={() => window.location.href = "/radio"}>Full Radio <i className="fas fa-chevron-right"></i></button>
+          <button className="section-link" onClick={() => router.push("/radio")}>Full Radio <i className="fas fa-chevron-right"></i></button>
         </div>
         <div className="azura-embed">
           <iframe
@@ -638,7 +638,7 @@ export default function DashboardPage() {
             <button className="minibar-play-btn" onClick={togglePlay}>
               <i className={`fas fa-${isPlaying ? "pause" : "play"}`}></i>
             </button>
-            <button className="minibar-expand" onClick={() => window.location.href = "/radio"}>
+            <button className="minibar-expand" onClick={() => router.push("/radio")}>
               <i className="fas fa-expand"></i>
             </button>
           </div>
@@ -652,7 +652,7 @@ export default function DashboardPage() {
       <section className="feed-section">
         <div className="section-header-inline">
           <h2 className="section-title">Now Playing <span className="section-title-badge">Recent</span></h2>
-          <button className="section-link" onClick={() => window.location.href = "/radio"}>Full History <i className="fas fa-chevron-right"></i></button>
+          <button className="section-link" onClick={() => router.push("/radio")}>Full History <i className="fas fa-chevron-right"></i></button>
         </div>
         <div className="rp-list">
           {songHistory.slice(0, 3).map((item, i) => {
@@ -693,9 +693,9 @@ export default function DashboardPage() {
       <section className="feed-section">
         <div className="section-header-inline">
           <h2 className="section-title">Featured Video</h2>
-              <button className="section-link" onClick={() => window.location.href = "/watch"}>See All Videos <i className="fas fa-chevron-right"></i></button>
+              <button className="section-link" onClick={() => router.push("/watch")}>See All Videos <i className="fas fa-chevron-right"></i></button>
         </div>
-        <div className="fv-card" onClick={() => window.location.href = `/watch/${featuredVideo.youtubeId}`}>
+        <div className="fv-card" onClick={() => player.play(featuredVideo)}>
           <div className="fv-thumb">
             <div className="fv-thumb-glow"></div>
             <img src={featuredVideo.thumbnail} alt="" />
@@ -732,11 +732,11 @@ export default function DashboardPage() {
       <section className="feed-section">
         <div className="section-header-inline">
           <h2 className="section-title">Sermon Series</h2>
-          <button className="section-link" onClick={() => window.location.href = "/watch"}>Browse All Series <i className="fas fa-chevron-right"></i></button>
+          <button className="section-link" onClick={() => router.push("/watch")}>Browse All Series <i className="fas fa-chevron-right"></i></button>
         </div>
         <div className="h-scroll">
           {seriesList.map((s, i) => (
-            <div className="sc-card" key={s.id || i} onClick={() => window.location.href = "/watch"}>
+            <div className="sc-card" key={s.id || i} onClick={() => router.push("/watch")}>
               <div className="sc-cover">
                 {s.coverImage ? (
                   <img src={s.coverImage} alt="" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
@@ -760,11 +760,11 @@ export default function DashboardPage() {
       <section className="feed-section">
         <div className="section-header-inline">
           <h2 className="section-title">Latest Videos</h2>
-          <button className="section-link" onClick={() => window.location.href = "/watch"}>See All <i className="fas fa-chevron-right"></i></button>
+          <button className="section-link" onClick={() => router.push("/watch")}>See All <i className="fas fa-chevron-right"></i></button>
         </div>
         <div className="vg-grid">
           {latestVideos.slice(0, 6).map((v) => (
-            <div className="vg-card" key={v.youtubeId} onClick={() => window.location.href = `/watch/${v.youtubeId}`}>
+            <div className="vg-card" key={v.youtubeId} onClick={() => player.play(v)}>
               <div className="vg-thumb">
                 <img src={v.thumbnail} alt="" />
                 <div className="vg-play-icon"><i className="fas fa-play"></i></div>
@@ -795,7 +795,7 @@ export default function DashboardPage() {
             if (images.length > 0) {
               imageViewer.open(images, 0);
             } else {
-              window.location.href = "/gallery";
+              router.push("/gallery");
             }
           }}
         />
@@ -805,7 +805,7 @@ export default function DashboardPage() {
       <section className="feed-section">
         <div className="section-header-inline">
           <h2 className="section-title">Today&apos;s Broadcast Schedule</h2>
-          <button className="section-link" onClick={() => window.location.href = "/radio"}>Full Schedule <i className="fas fa-chevron-right"></i></button>
+          <button className="section-link" onClick={() => router.push("/radio")}>Full Schedule <i className="fas fa-chevron-right"></i></button>
         </div>
         <div className="schedule-today">
           {scheduleLoading ? (

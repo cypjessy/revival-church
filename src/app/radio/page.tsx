@@ -692,7 +692,7 @@ export default function RadioPage() {
               <i className="fas fa-headphones"></i> {currentListeners}
             </div>
             {ytLive.status.isLive && (
-              <div className="yt-live-indicator" onClick={() => window.location.href = "/watch"}>
+              <div className="yt-live-indicator" onClick={() => router.push("/watch")}>
                 <i className="fab fa-youtube" style={{ color: "#FF0000" }}></i> Live
               </div>
             )}
@@ -1013,7 +1013,7 @@ export default function RadioPage() {
                   <button className="about-action-btn share" onClick={handleShare}>
                     <i className="fas fa-share-nodes"></i> Share Station
                   </button>
-                  <button className="about-action-btn" onClick={() => window.location.href = "/watch"}>
+                  <button className="about-action-btn" onClick={() => router.push("/watch")}>
                     <i className="fas fa-video"></i> Browse Videos
                   </button>
                 </div>
