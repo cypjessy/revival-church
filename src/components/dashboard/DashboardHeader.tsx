@@ -6,7 +6,7 @@ export default function DashboardHeader() {
       <div className="header-brand">
         <div className="header-logo"><i className="fas fa-cross"></i></div>
         <div className="header-text">
-          <h1>Turningpoint Church Nakuru</h1>
+          <h1>Kingdom Seekers Church Nakuru</h1>
         </div>
       </div>
       <div className="header-actions">

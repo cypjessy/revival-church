@@ -55,10 +55,11 @@ export default function ForgotPasswordModal() {
       await sendPasswordResetEmail(auth, email);
       setSent(true);
       showToast("Email Sent", "Check your inbox for password reset instructions", "success", 4000);
-    } catch (err: any) {
-      const msg = err.code === "auth/user-not-found"
+    } catch (err: unknown) {
+      const e = err as { code?: string; message?: string };
+      const msg = e.code === "auth/user-not-found"
         ? "No account found with this email"
-        : err.message || "Failed to send reset email";
+        : e.message || "Failed to send reset email";
       setError(msg);
     } finally {
       setLoading(false);

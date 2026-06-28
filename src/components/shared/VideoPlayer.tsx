@@ -176,7 +176,7 @@ export function useVideoPlayer({ videos, seriesList }: VideoPlayerDeps): VideoPl
     if (navigator.share) {
       navigator.share({
         title: selectedVideo?.title || "Grace Church",
-        text: `Watch "${selectedVideo?.title}" on Turningpoint Church Nakuru`,
+        text: `Watch "${selectedVideo?.title}" on Kingdom Seekers Church Nakuru`,
         url: `https://www.youtube.com/watch?v=${selectedVideo?.youtubeId}`,
       }).catch(() => {});
     } else {
@@ -241,7 +241,7 @@ export function useVideoPlayer({ videos, seriesList }: VideoPlayerDeps): VideoPl
   useEffect(() => {
     if (!showUpNext || !selectedVideo) return;
     let count = 10;
-    setUpNextCountdown(10);
+    queueMicrotask(() => setUpNextCountdown(10));
     upNextTimerRef.current = setInterval(() => {
       count -= 1;
       setUpNextCountdown(count);
@@ -266,7 +266,7 @@ export function useVideoPlayer({ videos, seriesList }: VideoPlayerDeps): VideoPl
         } catch { /* noop */ }
       }
     }
-    setWatchedVideos(new Set(watched));
+    queueMicrotask(() => setWatchedVideos(new Set(watched)));
   }, []);
 
   useEffect(() => () => { document.body.style.overflow = ""; }, []);

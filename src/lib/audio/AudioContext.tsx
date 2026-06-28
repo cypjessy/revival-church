@@ -2,26 +2,88 @@
 
 import { createContext, useContext, useRef, useState, useCallback, useEffect, type ReactNode } from "react";
 
-// Lazy-loaded Capacitor MediaSession plugin.
-// On web (Vercel) this gracefully degrades; on native Android it
-// provides lock-screen playback controls.
-// We use require() inside a Promise so the bundler only warns
-// instead of erroring on the missing package. The catch handler
-// ensures no runtime crash when the package is absent.
-let MediaSessionPromise: Promise<any> | null = null;
-function getMediaSession(): Promise<any> {
-  if (!MediaSessionPromise) {
-    MediaSessionPromise = new Promise((resolve) => {
+// Lazy-loaded Capacitor Music Controls plugin.
+// On web (Vercel) this gracefully degrades; on native Android/iOS it
+// provides a persistent notification with playback controls and a
+// foreground service that keeps audio alive in the background.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let mcPlugin: any = null;
+let mcPromise: Promise<boolean> | null = null;
+
+async function loadMusicControls(): Promise<boolean> {
+  if (!mcPromise) {
+    mcPromise = (async () => {
       try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const ms = require("@jofr/capacitor-media-session");
-        resolve(ms.MediaSession);
+        const { Capacitor } = await import("@capacitor/core");
+        if (!Capacitor.isNativePlatform()) return false;
       } catch {
-        resolve(null);
+        return false;
       }
-    });
+      try {
+        mcPlugin = await import("capacitor-music-controls-plugin");
+        return true;
+      } catch {
+        return false;
+      }
+    })();
   }
-  return MediaSessionPromise;
+  return mcPromise;
+}
+
+function getMC() {
+  return mcPlugin?.CapacitorMusicControls ?? null;
+}
+
+// ============================================================
+// NOTIFICATION HELPERS
+// ============================================================
+
+async function createNotification(title: string, artist: string, albumArt?: string) {
+  const mc = getMC();
+  if (!mc) return;
+  try {
+    await mc.destroy();
+  } catch { /* no-op */ }
+  try {
+    await mc.create({
+      track: title || "Kingdom Seekers Radio",
+      artist: artist || "Kingdom Seekers Church Nakuru",
+      album: "Radio Stream",
+      cover: albumArt || "",
+      hasPrev: false,
+      hasNext: false,
+      hasClose: true,
+      hasSkipForward: false,
+      hasSkipBackward: false,
+      duration: -1,
+      elapsed: 0,
+      isPlaying: true,
+      dismissable: false,
+      ticker: title ? `Now playing: ${title}` : "Kingdom Seekers Radio",
+    });
+  } catch {
+    // Plugin not available
+  }
+}
+
+async function updatePlaying(isPlaying: boolean) {
+  const mc = getMC();
+  if (!mc) return;
+  try {
+    await mc.updateIsPlaying({ isPlaying });
+  } catch {
+    // Plugin not available
+  }
+}
+
+async function destroyNotification() {
+  const mc = getMC();
+  if (!mc) return;
+  try {
+    await mc.destroy();
+  } catch {
+    // Plugin not available
+  }
 }
 
 // ============================================================
@@ -42,68 +104,14 @@ interface AudioContextType {
   stop: () => void;
   toggle: (url: string, stationId?: number) => void;
   setVolume: (v: number) => void;
-  /** Update the now-playing metadata shown in the Android media notification */
+  /** Update the now-playing metadata shown in the Android notification */
   updateMediaSession: (title: string, artist: string, albumArt?: string) => void;
-  /** Register callback for next/previous station (from Android media notification buttons) */
+  /** Register callback for next/previous station (from Android notification buttons) */
   setNextStationCallback: (cb: (() => void) | null) => void;
   setPrevStationCallback: (cb: (() => void) | null) => void;
 }
 
 const AudioCtx = createContext<AudioContextType | null>(null);
-
-/**
- * Sync the current playback state to Android's Media Session notification
- * (notification shade + lock screen controls) via the @jofr/capacitor-media-session
- * plugin, which bridges to Android's native MediaSession and foreground service.
- */
-async function syncMediaSession(props: {
-  isPlaying: boolean;
-  title?: string;
-  artist?: string;
-  albumArt?: string;
-  onPlay: () => void;
-  onPause: () => void;
-  onNext: (() => void) | null;
-  onPrev: (() => void) | null;
-}) {
-  try {
-    const ms = await getMediaSession();
-    if (!ms) return;
-
-    if (props.isPlaying) {
-      await ms.setPlaybackState({ playbackState: "playing" });
-      await ms.setMetadata({
-        title: props.title || "Turningpoint Radio",
-        artist: props.artist || "Turningpoint Church Nakuru",
-        album: "Radio Stream",
-        artwork: props.albumArt
-          ? [{ src: props.albumArt, sizes: "512x512", type: "image/jpeg" }]
-          : [{ src: "https://via.placeholder.com/512?text=KSC", sizes: "512x512", type: "image/png" }],
-      });
-    } else {
-      await ms.setPlaybackState({ playbackState: "paused" });
-    }
-
-    // Register action handlers (they persist across metadata updates)
-    await ms.setActionHandler({ action: "play" }, () => {
-      try { props.onPlay(); } catch {}
-    });
-    await ms.setActionHandler({ action: "pause" }, () => {
-      try { props.onPause(); } catch {}
-    });
-    await ms.setActionHandler({ action: "nexttrack" }, () => {
-      try { props.onNext?.(); } catch {}
-    });
-    await ms.setActionHandler({ action: "previoustrack" }, () => {
-      try { props.onPrev?.(); } catch {}
-    });
-    await ms.setActionHandler({ action: "stop" }, () => {
-      try { props.onPause(); } catch {}
-    });
-  } catch {
-    // Plugin may not be available
-  }
-}
 
 export function AudioProvider({ children }: { children: ReactNode }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -113,64 +121,121 @@ export function AudioProvider({ children }: { children: ReactNode }) {
   const [volume, setVolumeState] = useState(0.8);
 
   // Media session metadata (pushed by consuming components)
-  const mediaTitleRef = useRef("Turningpoint Radio");
-  const mediaArtistRef = useRef("Turningpoint Church Nakuru");
+  const mediaTitleRef = useRef("Kingdom Seekers Radio");
+  const mediaArtistRef = useRef("Kingdom Seekers Church Nakuru");
   const mediaArtRef = useRef<string | undefined>(undefined);
 
   // Next/prev station callbacks (set by consuming components).
-  // These are simple callbacks — the consuming component finds the next/prev
-  // station from its own stations state, so no station ID is passed.
-  // Stored as refs to avoid re-render loops when consumers pass inline callbacks.
   const nextCbRef = useRef<(() => void) | null>(null);
   const prevCbRef = useRef<(() => void) | null>(null);
 
-  // Sync media session whenever isPlaying or metadata changes
-  useEffect(() => {
-    syncMediaSession({
-      isPlaying,
-      title: mediaTitleRef.current,
-      artist: mediaArtistRef.current,
-      albumArt: mediaArtRef.current,
-      onPlay: () => {
-        // Resume the current audio stream
-        const audio = audioRef.current;
-        if (audio?.src && audio.src !== "") {
-          audio.play().catch(() => {});
+  // Refs that always hold the latest value for use in event handlers
+  const isPlayingRef = useRef(isPlaying);
+  isPlayingRef.current = isPlaying;
+  const currentStreamUrlRef = useRef(currentStreamUrl);
+  currentStreamUrlRef.current = currentStreamUrl;
+  const currentStationIdRef = useRef(currentStationId);
+  currentStationIdRef.current = currentStationId;
+
+  // Handle notification control events (play, pause, stop, headphone button)
+  const handleControlsAction = useCallback((message: string) => {
+    switch (message) {
+      case "music-controls-play": {
+        const url = currentStreamUrlRef.current;
+        if (url) {
+          const audio = audioRef.current;
+          if (audio) {
+            const cacheBust = url.includes("?") ? `&_=${Date.now()}` : `?_=${Date.now()}`;
+            audio.src = url + cacheBust;
+            audio.load();
+            audio.play().catch(() => {
+              setTimeout(() => {
+                audio.play().catch(() => {});
+              }, 300);
+            });
+          }
+          // Create notification immediately (before buffering completes)
+          createNotification(mediaTitleRef.current, mediaArtistRef.current, mediaArtRef.current);
+          setIsPlaying(true);
         }
-      },
-      onPause: () => {
+        break;
+      }
+      case "music-controls-pause":
         audioRef.current?.pause();
-      },
-      onNext: () => {
-        // The consuming component handles station switching from its own state
-        nextCbRef.current?.();
-      },
-      onPrev: () => {
-        prevCbRef.current?.();
-      },
+        setIsPlaying(false);
+        break;
+      case "music-controls-destroy":
+        // Stop button pressed — stop audio and remove notification
+        {
+          const audio = audioRef.current;
+          if (audio) {
+            audio.pause();
+            audio.removeAttribute("src");
+            audio.load();
+          }
+          setIsPlaying(false);
+          setCurrentStreamUrl(null);
+          setCurrentStationId(null);
+        }
+        break;
+      case "music-controls-media-button":
+        // Headphone button single press — toggle play/pause
+        if (isPlayingRef.current) {
+          audioRef.current?.pause();
+          setIsPlaying(false);
+        } else {
+          const url = currentStreamUrlRef.current;
+          if (url) {
+            const audio = audioRef.current;
+            if (audio) {
+              const cacheBust = url.includes("?") ? `&_=${Date.now()}` : `?_=${Date.now()}`;
+              audio.src = url + cacheBust;
+              audio.load();
+              audio.play().catch(() => {});
+            }
+            // Create notification immediately (before buffering completes)
+            createNotification(mediaTitleRef.current, mediaArtistRef.current, mediaArtRef.current);
+            setIsPlaying(true);
+          }
+        }
+        break;
+    }
+  }, []);
+
+  // Set up notification control event listeners once on mount
+  useEffect(() => {
+    loadMusicControls().then(() => {
+      const mc = getMC();
+      if (!mc) return;
+      // iOS uses the plugin's addListener
+      mc.addListener("controlsNotification", (info: { message: string }) => {
+        handleControlsAction(info.message);
+      });
     });
-  }, [isPlaying]);
+
+    // Android uses a document-level event (workaround for Capacitor bug)
+    const androidHandler = (e: Event) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const msg = (e as any).message;
+      if (msg) {
+        handleControlsAction(msg);
+      }
+    };
+    document.addEventListener("controlsNotification", androidHandler);
+
+    return () => {
+      document.removeEventListener("controlsNotification", androidHandler);
+    };
+  }, [handleControlsAction]);
 
   const updateMediaSession = useCallback(async (title: string, artist: string, albumArt?: string) => {
     mediaTitleRef.current = title;
     mediaArtistRef.current = artist;
     mediaArtRef.current = albumArt;
-    // Update the notification immediately so subsequent song changes
-    // reflect in the Android media notification without waiting for a
-    // play/pause state change.
-    try {
-      const ms = await getMediaSession();
-      if (!ms) return;
-      await ms.setMetadata({
-        title,
-        artist,
-        album: "Radio Stream",
-        artwork: albumArt
-          ? [{ src: albumArt, sizes: "512x512", type: "image/jpeg" }]
-          : [{ src: "https://via.placeholder.com/512?text=KSC", sizes: "512x512", type: "image/png" }],
-      });
-    } catch {
-      // Plugin not available
+
+    // If currently playing, update the notification with the new metadata
+    if (isPlayingRef.current) {
+      await createNotification(title, artist, albumArt);
     }
   }, []);
 
@@ -189,12 +254,22 @@ export function AudioProvider({ children }: { children: ReactNode }) {
     audio.style.display = "none";
     audio.preload = "none";
 
-    const onPlay = () => setIsPlaying(true);
-    const onPause = () => setIsPlaying(false);
-    const onEnded = () => setIsPlaying(false);
+    const onPlay = () => {
+      setIsPlaying(true);
+      // Safety net: ensure notification exists if the audio play() event
+      // fires without going through our explicit createNotification paths
+      createNotification(mediaTitleRef.current, mediaArtistRef.current, mediaArtRef.current);
+    };
+    const onPause = () => {
+      setIsPlaying(false);
+      updatePlaying(false);
+    };
+    const onEnded = () => {
+      setIsPlaying(false);
+      updatePlaying(false);
+    };
     const onError = () => {
-      // Stream might just be connecting — don't update isPlaying here
-      // because some stream errors are recoverable on reconnect
+      // Stream might just be connecting — don't update state
     };
 
     audio.addEventListener("play", onPlay);
@@ -215,12 +290,18 @@ export function AudioProvider({ children }: { children: ReactNode }) {
       audio.load();
       audio.remove();
       audioRef.current = null;
+      destroyNotification();
     };
   }, []);
 
   const play = useCallback((url: string, stationId?: number) => {
     const audio = audioRef.current;
     if (!audio || !url) return;
+
+    // Create notification immediately (before buffering) so the user
+    // sees controls as soon as they tap Play
+    createNotification(mediaTitleRef.current, mediaArtistRef.current, mediaArtRef.current);
+
     const cacheBust = url.includes("?") ? `&_=${Date.now()}` : `?_=${Date.now()}`;
     audio.src = url + cacheBust;
     audio.load();
@@ -249,6 +330,7 @@ export function AudioProvider({ children }: { children: ReactNode }) {
     setIsPlaying(false);
     setCurrentStreamUrl(null);
     setCurrentStationId(null);
+    destroyNotification();
   }, []);
 
   const toggle = useCallback((url: string, stationId?: number) => {
@@ -259,20 +341,18 @@ export function AudioProvider({ children }: { children: ReactNode }) {
       // Currently playing — pause
       audio.pause();
     } else {
+      // Create notification immediately (before buffering)
+      createNotification(mediaTitleRef.current, mediaArtistRef.current, mediaArtRef.current);
+
       // Force a fresh stream connection with cache busting.
-      // Setting the same URL after pause often fails to re-establish
-      // the stream on Android WebView — a timestamp param ensures
-      // the browser treats it as a new request.
       const cacheBust = url.includes("?") ? `&_=${Date.now()}` : `?_=${Date.now()}`;
       audio.src = url + cacheBust;
       audio.load();
 
-      // Attempt play with a retry — streams need time to buffer
       const attemptPlay = () => {
         const p = audio.play();
         if (p !== undefined) {
           p.catch(() => {
-            // Retry once after a brief delay
             setTimeout(() => {
               audio.play().catch(() => {});
             }, 300);

@@ -30,25 +30,13 @@ export default function RadioStationPage() {
   const [activeTab, setActiveTab] = useState<TabId>("overview");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [isLive, setIsLive] = useState(true);
-  const [listeners, setListeners] = useState(342);
-  const [nowPlayingTitle, setNowPlayingTitle] = useState("Amazing Grace (My Chains Are Gone)");
-  const [nowPlayingArtist, setNowPlayingArtist] = useState("Chris Tomlin");
-  const [activeDJ, setActiveDJ] = useState("Pastor Sarah");
 
   const { data: npData, refetch } = useNowPlaying(getStationId());
-
-  // Sync state from polling
-  useEffect(() => {
-    if (!npData) return;
-    setIsLive(npData.live.isLive);
-    setListeners(npData.listeners.current);
-    if (npData.live.streamerName) setActiveDJ(npData.live.streamerName);
-    if (npData.nowPlaying) {
-      setNowPlayingTitle(npData.nowPlaying.song.title);
-      setNowPlayingArtist(npData.nowPlaying.song.artist);
-    }
-  }, [npData]);
+  const isLive = npData ? npData.live.isLive : true;
+  const listeners = npData ? npData.listeners.current : 342;
+  const nowPlayingTitle = npData?.nowPlaying?.song?.title || "Amazing Grace (My Chains Are Gone)";
+  const nowPlayingArtist = npData?.nowPlaying?.song?.artist || "Chris Tomlin";
+  const activeDJ = npData?.live?.streamerName || "Pastor Sarah";
 
   // Keyboard shortcut: Escape closes sidebar
   useEffect(() => {
@@ -496,7 +484,7 @@ export default function RadioStationPage() {
           <style>{`@media(max-width:768px){#rsMobileMenuBtn{display:flex!important;}}`}</style>
           <div className="rs-header-logo"><i className="fas fa-tower-broadcast"></i></div>
           <div className="rs-header-info">
-            <div className="rs-header-name">Turningpoint Radio</div>
+            <div className="rs-header-name">Kingdom Seekers Radio</div>
           </div>
           <div className="rs-header-right">
             {activeDJ && <div className="rs-dj-name"><i className="fas fa-user"></i> {activeDJ}</div>}

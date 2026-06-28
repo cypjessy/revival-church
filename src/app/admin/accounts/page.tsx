@@ -30,7 +30,7 @@ export default function AdminAccountsPage() {
     }
   }, []);
 
-  useEffect(() => { loadAdmins(); }, [loadAdmins]);
+  useEffect(() => { setTimeout(() => loadAdmins(), 0); }, [loadAdmins]);
 
   const handleCopyLink = async () => {
     const token = process.env.NEXT_PUBLIC_ADMIN_REG_TOKEN || "admin-secret-token";
@@ -53,7 +53,7 @@ export default function AdminAccountsPage() {
 
   function formatDate(ts: number | Timestamp | undefined): string {
     if (!ts) return "—";
-    const d = typeof ts === "number" ? new Date(ts) : (ts as any).toDate?.() || new Date();
+    const d = typeof ts === "number" ? new Date(ts) : (ts as { toDate?: () => Date }).toDate?.() || new Date();
     return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   }
 

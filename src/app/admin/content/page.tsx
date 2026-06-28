@@ -17,7 +17,7 @@ import { getAlbumEntries, addAlbumEntry, updateAlbumEntry, deleteAlbumEntry } fr
 import type { AlbumEntry } from "@/lib/albumEntries";
 import { Timestamp } from "firebase/firestore";
 
-const churchId = process.env.NEXT_PUBLIC_CHURCH_ID || "turningpoint_church_nakuru";
+const churchId = process.env.NEXT_PUBLIC_CHURCH_ID || "kingdom_seekers_church_nakuru";
 const categories = ["all", "events", "services", "community", "leadership", "facility"];
 const defaultAlbumTitles: Record<string, string> = {
   events: "Church Events",
@@ -202,7 +202,7 @@ export default function AdminContentPage() {
       .then((r) => r.json())
       .then((data) => setStorageUsage(data))
       .catch(() => {});
-    fetchData();
+    setTimeout(() => fetchData(), 0);
   }, [fetchData]);
 
   // ========== DERIVED DATA ==========

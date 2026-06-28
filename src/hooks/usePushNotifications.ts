@@ -22,11 +22,12 @@ export function usePushNotifications() {
 
     registeredUid.current = user.uid;
 
-    let unsubs: (() => void)[] = [];
+    const unsubs: (() => void)[] = [];
 
     (async () => {
       try {
         // Only run on native Android/iOS, not in browser dev mode
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const isNative = typeof (window as any).Capacitor !== "undefined" && (window as any).Capacitor.isNativePlatform();
         if (!isNative) return;
 
@@ -56,7 +57,7 @@ export function usePushNotifications() {
 
         const unsubReceived = await PushNotifications.addListener("pushNotificationReceived", (notification) => {
           const data = notification.data as PushNotificationData;
-          const title = notification.title || data?.title || "Turningpoint Church Nakuru";
+          const title = notification.title || data?.title || "Kingdom Seekers Church Nakuru";
           const body = notification.body || data?.body || "";
           window.dispatchEvent(
             new CustomEvent("show-toast", {

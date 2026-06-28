@@ -42,7 +42,7 @@ export default function GalleryPage() {
 
   /* Real-time listener for gallery photos — updates instantly when admin uploads */
   useEffect(() => {
-    setLoadingData(true);
+    queueMicrotask(() => setLoadingData(true));
     const q = query(collection(db, "gallery_photos"), orderBy("uploadedAt", "desc"));
     const unsub = onSnapshot(q, (snap) => {
       const photos = snap.docs.map((d) => ({ id: d.id, ...d.data() } as GalleryPhoto));
@@ -370,7 +370,7 @@ export default function GalleryPage() {
         {offline && (
           <div className="offline-banner">
             <i className="fas fa-wifi-slash"></i>
-            <span>You're offline — showing cached content</span>
+            <span>You&apos;re offline — showing cached content</span>
           </div>
         )}
 
@@ -378,7 +378,7 @@ export default function GalleryPage() {
         <div className="header">
           <div className="header-logo"><i className="fas fa-images"></i></div>
           <div className="header-info">
-            <div className="header-church">Turningpoint Church Nakuru</div>
+            <div className="header-church">Kingdom Seekers Church Nakuru</div>
           </div>
           <div className="header-actions">
           </div>

@@ -19,9 +19,19 @@ import {
   getApiKey,
   getStationId,
   getPublicPlayerUrl,
+  getStreamers,
+  createStreamer,
+  updateStreamer,
+  deleteStreamer,
 } from "@/lib/azuracast";
 import { hapticSuccess } from "@/lib/haptics";
 import type { Playlist, StationFile, QueueItem } from "@/lib/azuracast";
+import dynamic from "next/dynamic";
+
+const RadioOverviewTab = dynamic(() => import("@/components/admin/radio/tabs/RadioOverviewTab").then(m => m.RadioOverviewTab), { ssr: false });
+const RadioMediaTab = dynamic(() => import("@/components/admin/radio/tabs/RadioMediaTab").then(m => m.RadioMediaTab), { ssr: false });
+const RadioPlaylistsTab = dynamic(() => import("@/components/admin/radio/tabs/RadioPlaylistsTab").then(m => m.RadioPlaylistsTab), { ssr: false });
+const RadioGoLiveTab = dynamic(() => import("@/components/admin/radio/tabs/RadioGoLiveTab").then(m => m.RadioGoLiveTab), { ssr: false });
 
 // ========== REFERENCE DATA ==========
 const sidebarTabs = [
@@ -101,10 +111,79 @@ export default function AdminRadioPage() {
   const [plActionLoading, setPlActionLoading] = useState(false);
   const [mediaActionLoading, setMediaActionLoading] = useState(false);
 
+  // Go Live state
+  const [streamers, setStreamers] = useState<import("@/lib/azuracast").Streamer[]>([]);
+  const [glLoading, setGlLoading] = useState(false);
+  const [glActionLoading, setGlActionLoading] = useState<string | null>(null);
+  const [showStreamerForm, setShowStreamerForm] = useState(false);
+  const [editingStreamerId, setEditingStreamerId] = useState<string | null>(null);
+  const [streamerForm, setStreamerForm] = useState({ displayName: "", username: "", password: "" });
+  const [glBroadcasts, setGlBroadcasts] = useState<{ streamer: string; date: string; duration: string; startTime: string }[]>([]);
+  const [showPassword, setShowPassword] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+  const [selectedStreamerId, setSelectedStreamerId] = useState<string | null>(null);
+  const [streamerPasswords, setStreamerPasswords] = useState<Record<string, string>>({});
+  const MASTER_PW = "7ZajL44g";
+
+  // Poll Go Live data when tab is active
+  useEffect(() => {
+    if (activeTab !== "golive") return;
+    const poll = async () => {
+      await Promise.resolve(); // defer to avoid sync setState
+      setGlLoading(true);
+      const [strResult, npResult] = await Promise.all([
+        getStreamers().catch(() => [] as import("@/lib/azuracast").Streamer[]),
+        getNowPlaying(getStationId()).catch(() => null),
+      ]);
+      setStreamers(strResult);
+      if (npResult) {
+        setOverviewNP(npResult);
+        setListeners(npResult.listeners.current);
+        setIsLive(npResult.live.isLive);
+      }
+      // Set initial selected streamer
+      if (strResult.length > 0 && !selectedStreamerId) {
+        setSelectedStreamerId(strResult[0].id);
+      }
+      // Fetch broadcasts for all streamers
+      const allBroadcasts: { streamer: string; date: string; duration: string; startTime: string }[] = [];
+      for (const s of strResult) {
+        try {
+          const res = await fetch(
+            `https://azuracast.histoview.co.ke/api/station/2/streamer/${s.id}/broadcasts`,
+            { headers: { Authorization: `Bearer ${getApiKey()}` } }
+          );
+          if (res.ok) {
+            const data = await res.json();
+            for (const b of (Array.isArray(data) ? data : [])) {
+              const start = new Date(b.timestampStart);
+              const end = new Date(b.timestampEnd);
+              const diffSec = Math.round((end.getTime() - start.getTime()) / 1000);
+              const mins = Math.floor(diffSec / 60);
+              const secs = diffSec % 60;
+              allBroadcasts.push({
+                streamer: s.displayName,
+                date: start.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+                startTime: start.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
+                duration: diffSec < 60 ? `${diffSec}s` : `${mins}m ${secs}s`,
+              });
+            }
+          }
+        } catch {}
+      }
+      allBroadcasts.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      setGlBroadcasts(allBroadcasts);
+      setGlLoading(false);
+    };
+    poll();
+    const interval = setInterval(poll, 15000);
+    return () => clearInterval(interval);
+  }, [activeTab]);
+
   // Fetch playlists and files when Playlists or Media tab is active
   useEffect(() => {
     if (activeTab !== "playlists" && activeTab !== "media") return;
-    setLoadingPlaylists(activeTab === "playlists");
+    queueMicrotask(() => setLoadingPlaylists(activeTab === "playlists"));
     Promise.all([
       getPlaylists().then(setPlaylists),
       getStationFiles().then(setStationFiles),
@@ -116,8 +195,9 @@ export default function AdminRadioPage() {
   // Poll overview data when tab is active
   useEffect(() => {
     if (activeTab !== "overview") return;
-    setOverviewLoading(true);
     const poll = async () => {
+      await Promise.resolve();
+      setOverviewLoading(true);
       const [np, status, history, queue, playlists, files] = await Promise.all([
         getNowPlaying(getStationId()).catch(() => null),
         getStationStatus(getStationId()).catch(() => ({ backendRunning: false })),
@@ -152,1554 +232,144 @@ export default function AdminRadioPage() {
     return () => clearInterval(interval);
   }, [activeTab]);
 
-  const renderOverview = () => {
-    const np = overviewNP?.nowPlaying;
-    const progressPct = np && np.duration > 0 ? Math.round((np.elapsed / np.duration) * 100) : 0;
-    const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
-    const timeAgo = (iso: string) => {
-      const diff = (Date.now() - new Date(iso).getTime()) / 1000;
-      if (diff < 60) return "just now";
-      if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
-      return `${Math.floor(diff / 3600)}h ago`;
-    };
+  const renderOverview = () => (
+    <RadioOverviewTab
+      overviewNP={overviewNP}
+      overviewHistory={overviewHistory}
+      overviewLoading={overviewLoading}
+      autoDJ={autoDJ}
+      isLive={isLive}
+      isPlaying={isPlaying}
+      listeners={listeners}
+      backendRunning={backendRunning}
+      setIsPlaying={setIsPlaying}
+      setAutoDJ={setAutoDJ}
+      pcMode={pcMode}
+      pcQueue={pcQueue}
+      pcPlaylists={pcPlaylists}
+      pcFiles={pcFiles}
+      pcActivePlaylist={pcActivePlaylist}
+      pcActiveTrack={pcActiveTrack}
+      pcAutoDJ={pcAutoDJ}
+      pcActionLoading={pcActionLoading}
+      setPcMode={setPcMode}
+      setPcPlaylists={setPcPlaylists}
+      setPcActivePlaylist={setPcActivePlaylist}
+      setPcActiveTrack={setPcActiveTrack}
+      setPcActionLoading={setPcActionLoading}
+      setActiveTab={setActiveTab}
+    />
+  );
+
+  const renderMedia = () => (
+    <RadioMediaTab
+      stationFiles={stationFiles}
+      setStationFiles={setStationFiles}
+      mediaSearch={mediaSearch}
+      setMediaSearch={setMediaSearch}
+      mediaFilterPlaylist={mediaFilterPlaylist}
+      setMediaFilterPlaylist={setMediaFilterPlaylist}
+      selectedFileIds={selectedFileIds}
+      setSelectedFileIds={setSelectedFileIds}
+      uploadProgress={uploadProgress}
+      setUploadProgress={setUploadProgress}
+      editingFile={editingFile}
+      setEditingFile={setEditingFile}
+      editTitle={editTitle}
+      setEditTitle={setEditTitle}
+      editArtist={editArtist}
+      setEditArtist={setEditArtist}
+      editAlbum={editAlbum}
+      setEditAlbum={setEditAlbum}
+      showMediaActions={showMediaActions}
+      setShowMediaActions={setShowMediaActions}
+      menuPos={menuPos}
+      setMenuPos={setMenuPos}
+      dragging={dragging}
+      setDragging={setDragging}
+      playlistPickerOpen={playlistPickerOpen}
+      setPlaylistPickerOpen={setPlaylistPickerOpen}
+      playlists={playlists}
+      mediaActionLoading={mediaActionLoading}
+      setMediaActionLoading={setMediaActionLoading}
+    />
+  );
+  const renderPlaylists = () => (
+    <RadioPlaylistsTab
+      playlists={playlists}
+      setPlaylists={setPlaylists}
+      stationFiles={stationFiles}
+      setStationFiles={setStationFiles}
+      loadingPlaylists={loadingPlaylists}
+      setLoadingPlaylists={setLoadingPlaylists}
+      selectedPlId={selectedPlId}
+      setSelectedPlId={setSelectedPlId}
+      showEditPlModal={showEditPlModal}
+      setShowEditPlModal={setShowEditPlModal}
+      editingPlId={editingPlId}
+      setEditingPlId={setEditingPlId}
+      plConfirmDelete={plConfirmDelete}
+      setPlConfirmDelete={setPlConfirmDelete}
+      plMenuOpen={plMenuOpen}
+      setPlMenuOpen={setPlMenuOpen}
+      showCreatePlaylist={showCreatePlaylist}
+      setShowCreatePlaylist={setShowCreatePlaylist}
+      plForm={plForm}
+      setPlForm={setPlForm}
+      plSchedule={plSchedule}
+      setPlSchedule={setPlSchedule}
+      showSongPicker={showSongPicker}
+      setShowSongPicker={setShowSongPicker}
+      addSongsSearch={addSongsSearch}
+      setAddSongsSearch={setAddSongsSearch}
+      addSongsSelected={addSongsSelected}
+      setAddSongsSelected={setAddSongsSelected}
+      addSongsPlId={addSongsPlId}
+      setAddSongsPlId={setAddSongsPlId}
+      plCreateType={plCreateType}
+      setPlCreateType={setPlCreateType}
+      plCreateOrder={plCreateOrder}
+      setPlCreateOrder={setPlCreateOrder}
+      plFilterTab={plFilterTab}
+      setPlFilterTab={setPlFilterTab}
+      playlistFilter={playlistFilter}
+      setPlaylistFilter={setPlaylistFilter}
+      showScheduleView={showScheduleView}
+      setShowScheduleView={setShowScheduleView}
+      plActionLoading={plActionLoading}
+      setPlActionLoading={setPlActionLoading}
+      pcActivePlaylist={pcActivePlaylist}
+    />
+  );
+
+  const renderGoLive = () => (
+    <RadioGoLiveTab
+      isLive={isLive}
+      listeners={listeners}
+      streamers={streamers}
+      setStreamers={setStreamers}
+      glLoading={glLoading}
+      glActionLoading={glActionLoading}
+      setGlActionLoading={setGlActionLoading}
+      showStreamerForm={showStreamerForm}
+      setShowStreamerForm={setShowStreamerForm}
+      editingStreamerId={editingStreamerId}
+      setEditingStreamerId={setEditingStreamerId}
+      streamerForm={streamerForm}
+      setStreamerForm={setStreamerForm}
+      glBroadcasts={glBroadcasts}
+      showPassword={showPassword}
+      setShowPassword={setShowPassword}
+      copyFeedback={copyFeedback}
+      setCopyFeedback={setCopyFeedback}
+      selectedStreamerId={selectedStreamerId}
+      setSelectedStreamerId={setSelectedStreamerId}
+      streamerPasswords={streamerPasswords}
+      setStreamerPasswords={setStreamerPasswords}
+      MASTER_PW={MASTER_PW}
+    />
+  );
 
-    if (overviewLoading && !overviewNP) {
-      return (
-        <div className="overview-content">
-          <div className="overview-cards-row">
-            <div className="skeleton-card" style={{ flex: 1, padding: 16 }}>
-              <div className="skeleton-loading skeleton-line w40 h24" style={{ marginBottom: 12 }}></div>
-              <div className="skeleton-loading skeleton-line w60 h40" style={{ marginBottom: 8 }}></div>
-              <div className="skeleton-loading skeleton-line w30" style={{ marginBottom: 4 }}></div>
-            </div>
-            <div className="skeleton-card" style={{ flex: 1, padding: 16 }}>
-              <div className="skeleton-loading skeleton-line w40 h24" style={{ marginBottom: 12 }}></div>
-              <div className="skeleton-loading skeleton-line w60 h40" style={{ marginBottom: 8 }}></div>
-              <div className="skeleton-loading skeleton-line w30" style={{ marginBottom: 4 }}></div>
-            </div>
-          </div>
-          <div className="skeleton-card" style={{ padding: 16, display: "flex", gap: 16, alignItems: "center", marginTop: 16 }}>
-            <div className="skeleton-loading" style={{ width: 80, height: 80, borderRadius: "var(--radius-md)", flexShrink: 0 }}></div>
-            <div style={{ flex: 1 }}>
-              <div className="skeleton-loading skeleton-line w80 h24"></div>
-              <div className="skeleton-loading skeleton-line w40"></div>
-              <div className="skeleton-loading skeleton-line w60"></div>
-            </div>
-          </div>
-          <div className="skeleton-block" style={{ marginTop: 16 }}>
-            <div className="skeleton-loading skeleton-line w40 h24" style={{ marginBottom: 12 }}></div>
-            <div className="skeleton-loading skeleton-line w80" style={{ marginBottom: 6 }}></div>
-            <div className="skeleton-loading skeleton-line w60" style={{ marginBottom: 6 }}></div>
-            <div className="skeleton-loading skeleton-line w80" style={{ marginBottom: 6 }}></div>
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <div className="overview-content">
-        {/* Station Status + AutoDJ Row */}
-        <div className="overview-cards-row">
-          {/* Station Status Card */}
-          <div className="status-card">
-            <div className="status-card-header">
-              <span className="status-card-label">Station</span>
-              <div className={`status-badge ${isLive ? "live" : "offline"}`}>
-                <span className={`status-dot ${isLive ? "pulse" : ""}`}></span>
-                {isLive ? "Online" : "Offline"}
-              </div>
-            </div>
-            <div className="status-card-body">
-              <div className="status-card-info">
-                <span className="status-card-stat">{listeners}</span>
-                <span className="status-card-stat-label">Listeners</span>
-              </div>
-              <a href={overviewNP?.station ? `${getApiBase()}/public/${overviewNP.station.shortName}` : "#"}
-                target="_blank" rel="noopener noreferrer"
-                className={`broadcast-ctrl-btn ${isLive ? "stop" : "start"}`}
-                style={{ textDecoration: "none", textAlign: "center", lineHeight: "44px" }}>
-                <i className="fas fa-external-link"></i> Public Page
-              </a>
-            </div>
-          </div>
-
-          {/* AutoDJ Status Card */}
-          <div className="status-card">
-            <div className="status-card-header">
-              <span className="status-card-label">AutoDJ</span>
-              <div className={`status-badge ${autoDJ ? "live" : "offline"}`}>
-                <span className={`status-dot ${autoDJ ? "pulse" : ""}`}></span>
-                {autoDJ ? "Running" : "Stopped"}
-              </div>
-            </div>
-            <div className="status-card-body">
-              <div className="status-card-info">
-                <span className="status-card-stat">{overviewHistory.length}</span>
-                <span className="status-card-stat-label">Recent Songs</span>
-              </div>
-              <button
-                className={`broadcast-ctrl-btn ${autoDJ ? "stop" : "start"}`}
-                onClick={async () => {
-                  const newAutoDJ = !autoDJ;
-                  setAutoDJ(newAutoDJ);
-                  try {
-                    await toggleAutoDJ();
-                    await hapticSuccess();
-                  } catch {
-                    setAutoDJ(!newAutoDJ);
-                  }
-                }}
-              >
-                <i className={`fas ${autoDJ ? "fa-pause" : "fa-play"}`}></i>
-                {autoDJ ? "Pause AutoDJ" : "Start AutoDJ"}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Now Playing Card */}
-        <div className="now-playing-card">
-          <div className="now-playing-cover">
-            <img
-              src={np?.song.albumArt || "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=120&h=120&fit=crop"}
-              alt="Now Playing"
-            />
-            {backendRunning && (
-              <div className="now-playing-equalizer">
-                <span></span><span></span><span></span><span></span>
-              </div>
-            )}
-          </div>
-          <div className="now-playing-info">
-            <div className="now-playing-title">{backendRunning && np?.song.title ? np.song.title : "Station Offline"}</div>
-            <div className="now-playing-artist">{backendRunning && np?.song.artist ? np.song.artist : "Backend not running"}</div>
-            {backendRunning && np && (
-              <div className="now-playing-progress">
-                <div className="progress-bar">
-                  <div className="progress-fill" style={{ width: `${progressPct}%` }}></div>
-                </div>
-                <div className="progress-time">
-                  <span>{fmtTime(np.elapsed)}</span>
-                  <span>{fmtTime(np.duration)}</span>
-                </div>
-              </div>
-            )}
-          </div>
-          <button
-            className="mini-player-btn"
-            onClick={() => {
-              setIsPlaying(!isPlaying);
-              if (isPlaying) {
-                import("@capacitor/browser").then(({ Browser }) => Browser.open({ url: overviewNP?.station ? `${getApiBase()}/public/${overviewNP.station.shortName}` : "#" })).catch(() => window.open(overviewNP?.station ? `${getApiBase()}/public/${overviewNP.station.shortName}` : "#", "_blank"));
-              }
-            }}
-            title={backendRunning ? "" : "Station is offline"}
-            disabled={!backendRunning}
-          >
-            <i className={`fas ${isPlaying ? "fa-stop" : "fa-play"}`}></i>
-          </button>
-        </div>
-
-        {/* Quick Actions */}
-        <div className="section-block">
-          <div className="section-block-header">
-            <h3>Quick Actions</h3>
-          </div>
-          <div className="quick-actions-row">
-            <button className="quick-action-btn" onClick={() => setActiveTab("media")}>
-              <div className="qab-icon blue"><i className="fas fa-cloud-arrow-up"></i></div>
-              <span>Upload Media</span>
-            </button>
-            <button className="quick-action-btn" onClick={() => setActiveTab("playlists")}>
-              <div className="qab-icon purple"><i className="fas fa-list"></i></div>
-              <span>New Playlist</span>
-            </button>
-          </div>
-        </div>
-
-        {/* AzuraCast Embed Player */}
-        <div className="section-block">
-          <div className="section-block-header">
-            <h3><i className="fas fa-tower-broadcast" style={{ marginRight: 6 }}></i>Live Player</h3>
-          </div>
-          <div style={{ borderRadius: "var(--radius-sm)", overflow: "hidden" }}>
-            <iframe src="https://azuracast.histoview.co.ke/public/turningpoint_church/embed?theme=dark" style={{ width: "100%", minHeight: 150, height: 150, border: "none", display: "block" }}></iframe>
-          </div>
-        </div>
-
-        {/* ========== PLAY CONTROL (integrated) ========== */}
-        <div className="section-block">
-          <div className="section-block-header">
-            <h3><i className="fas fa-play-circle" style={{ marginRight: 6 }}></i>Play Control</h3>
-            <span className="section-block-count" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span className={`ov-pc-dot ${pcAutoDJ ? "green" : "gray"}`}></span>
-              AutoDJ: {pcAutoDJ ? "On" : "Off"}
-            </span>
-          </div>
-
-          {/* Now Playing indicator (only when backend is broadcasting) */}
-          {backendRunning && (pcActivePlaylist || pcActiveTrack) && (
-            <div className="ov-pc-now-playing">
-              <i className="fas fa-circle-play" style={{ color: "var(--success)" }}></i>
-              {pcActiveTrack
-                ? `Playing: ${pcActiveTrack}`
-                : `Playing: ${pcPlaylists.find((p) => p.id === pcActivePlaylist)?.name || "Unknown"}`
-              }
-            </div>
-          )}
-
-          {/* Mode Selector */}
-          <div className="ov-pc-mode-row">
-            {([
-              { id: "schedule" as const, label: "Schedule", icon: "fa-calendar-days" },
-              { id: "playlist" as const, label: "Playlists", icon: "fa-list" },
-              { id: "single" as const, label: "Single Track", icon: "fa-music" },
-            ]).map((m) => (
-              <button
-                key={m.id}
-                className={`ov-pc-mode-btn ${pcMode === m.id ? "active" : ""}`}
-                onClick={() => setPcMode(m.id)}
-              >
-                <i className={`fas ${m.icon}`}></i>
-                {m.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Mode Content */}
-          {pcMode === "schedule" && (
-            <div className="ov-pc-list">
-              {pcPlaylists.filter((p) => p.schedule).length === 0 ? (
-                <div className="ov-pc-empty">No scheduled playlists</div>
-              ) : (
-                pcPlaylists.filter((p) => p.schedule).map((pl) => (
-                  <div className="ov-pc-item" key={pl.id}>
-                    <div className="ov-pc-item-info">
-                      <div className="ov-pc-item-name">{pl.name}</div>
-                      <div className="ov-pc-item-sub">
-                        {pl.schedule!.days.map((d) => ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d]).join(", ")}
-                        &middot; {pl.schedule!.startTime} - {pl.schedule!.endTime}
-                      </div>
-                    </div>
-                    <label className="pl-toggle" onClick={(e) => e.stopPropagation()}>
-                      <input type="checkbox" checked={pl.enabled}
-                        disabled={pcActionLoading !== null}
-                        onChange={async () => {
-                          if (pcActionLoading) return;
-                          setPcActionLoading(pl.id);
-                          try {
-                            const updated = await apiTogglePlaylist(pl.id);
-                            setPcPlaylists((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
-                            await hapticSuccess();
-                          } catch {}
-                          setPcActionLoading(null);
-                        }}
-                      />
-                      <span className="pl-toggle-slider"></span>
-                    </label>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-
-          {pcMode === "playlist" && (
-            <div className="ov-pc-list">
-              {pcActivePlaylist && (
-                <div className="ov-pc-active">
-                  <i className="fas fa-circle-play"></i>
-                  Playing: {pcPlaylists.find((p) => p.id === pcActivePlaylist)?.name || "Unknown"}
-                </div>
-              )}
-              {pcPlaylists.filter((p) => !p.schedule).length === 0 ? (
-                <div className="ov-pc-empty">No playlists yet</div>
-              ) : (
-                pcPlaylists.filter((p) => !p.schedule).map((pl) => (
-                  <div className="ov-pc-item" key={pl.id}>
-                    <div className="ov-pc-item-info">
-                      <div className="ov-pc-item-name">{pl.name}</div>
-                      <div className="ov-pc-item-sub">{pl.songCount} songs &middot; weight {pl.weight}</div>
-                    </div>
-                    <button
-                      className={`ov-pc-play-btn ${pcActivePlaylist === pl.id ? "active" : ""}`}
-                      onClick={async () => {
-                        if (pcActionLoading) return;
-                        setPcActionLoading(pl.id);
-                        const current = pcPlaylists;
-                        for (const p of current) {
-                          if (p.enabled !== (p.id === pl.id)) {
-                            try { const u = await apiTogglePlaylist(p.id); setPcPlaylists((prev) => prev.map((pp) => (pp.id === u.id ? u : pp))); } catch {}
-                          }
-                        }
-                        setPcActivePlaylist(pl.id);
-                        await hapticSuccess();
-                        setPcActionLoading(null);
-                      }}
-                      disabled={pcActivePlaylist === pl.id || pcActionLoading !== null}
-                    >
-                      <i className={`fas ${pcActionLoading === pl.id ? "fa-spinner fa-spin" : pcActivePlaylist === pl.id ? "fa-check" : "fa-play"}`}></i>
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-
-          {pcMode === "single" && (
-            <div className="ov-pc-list">
-              <div className="ov-pc-empty" style={{ fontSize: 12 }}>
-                <i className="fas fa-info-circle"></i> Click a file to create a temp playlist and play it
-              </div>
-              {pcFiles.length === 0 ? (
-                <div className="ov-pc-empty">No media files</div>
-              ) : (
-                pcFiles.map((f) => (
-                  <div className="ov-pc-item" key={f.id}>
-                    <div className="ov-pc-item-info">
-                      <div className="ov-pc-item-name">{f.title || f.path}</div>
-                      <div className="ov-pc-item-sub">{f.artist} &middot; {f.duration}</div>
-                    </div>
-                    <button className="ov-pc-play-btn" onClick={async () => {
-                      if (pcActionLoading) return;
-                      setPcActionLoading(f.id);
-                      try {
-                        let pl = pcPlaylists.find((p) => p.name === "__single__");
-                        if (!pl) {
-                          const created = await apiCreatePlaylist({ name: "__single__", type: "standard", order: "shuffle", weight: 1 });
-                          pl = created;
-                          setPcPlaylists((prev) => [...prev, created]);
-                        }
-                        await apiAddSongs(pl.id, [f.id]);
-                        const current = pcPlaylists;
-                        for (const p of current) {
-                          if (p.enabled !== (p.id === pl!.id)) {
-                            try { const u = await apiTogglePlaylist(p.id); setPcPlaylists((prev) => prev.map((pp) => (pp.id === u.id ? u : pp))); } catch {}
-                          }
-                        }
-                        setPcActivePlaylist(pl.id);
-                        setPcActiveTrack(f.title || f.path);
-                        window.dispatchEvent(new CustomEvent("show-toast", {
-                          detail: { title: "Playing", message: f.title, type: "success", duration: 2000 },
-                        }));
-                        await hapticSuccess();
-                      } catch {}
-                      setPcActionLoading(null);
-                    }}
-                      disabled={pcActionLoading !== null}
-                    >
-                      <i className={`fas ${pcActionLoading === f.id ? "fa-spinner fa-spin" : "fa-play"}`}></i>
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-
-          {/* Queue */}
-          <div className="ov-pc-queue-header">
-            <span>Upcoming Queue</span>
-            <span className="ov-pc-queue-count">{pcQueue.length} songs</span>
-          </div>
-          <div className="ov-pc-queue">
-            {pcQueue.length === 0 ? (
-              <div className="ov-pc-empty" style={{ padding: "8px 0" }}>No upcoming songs</div>
-            ) : (
-              pcQueue.slice(0, 5).map((item, i) => (
-                <div className="ov-pc-q-item" key={i}>
-                  <span className="ov-pc-q-num">{i + 1}</span>
-                  <div className="ov-pc-q-info">
-                    <div className="ov-pc-q-title">{item.song.title || "Unknown"}</div>
-                    <div className="ov-pc-q-artist">{item.song.artist || "Unknown"}</div>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  const renderMedia = () => {
-    const filteredFiles = stationFiles.filter((f) => {
-      const matchesSearch =
-        !mediaSearch ||
-        f.title.toLowerCase().includes(mediaSearch.toLowerCase()) ||
-        f.artist.toLowerCase().includes(mediaSearch.toLowerCase()) ||
-        f.album.toLowerCase().includes(mediaSearch.toLowerCase());
-      const matchesPlaylist =
-        !mediaFilterPlaylist ||
-        f.playlists.includes(mediaFilterPlaylist);
-      return matchesSearch && matchesPlaylist;
-    });
-
-    const allSelected = filteredFiles.length > 0 && filteredFiles.every((f) => selectedFileIds.has(f.id));
-
-    const toggleFileSelect = (id: string) => {
-      const next = new Set(selectedFileIds);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      setSelectedFileIds(next);
-    };
-
-    const toggleSelectAll = () => {
-      if (allSelected) {
-        setSelectedFileIds(new Set());
-      } else {
-        setSelectedFileIds(new Set(filteredFiles.map((f) => f.id)));
-      }
-    };
-
-    const startEdit = (file: StationFile) => {
-      setEditingFile(file.id);
-      setEditTitle(file.title);
-      setEditArtist(file.artist);
-      setEditAlbum(file.album);
-    };
-
-    const saveEdit = async () => {
-      if (!editingFile || mediaActionLoading) return;
-      setMediaActionLoading(true);
-      const file = stationFiles.find((f) => f.id === editingFile);
-      const fileId = file?.unique_id || editingFile;
-      const ok = await updateFileMetadata(fileId, {
-        title: editTitle,
-        artist: editArtist,
-        album: editAlbum,
-      });
-      if (ok) {
-        setStationFiles((prev) =>
-          prev.map((f) =>
-            f.id === editingFile
-              ? { ...f, title: editTitle, artist: editArtist, album: editAlbum }
-              : f
-          )
-        );
-      }
-      window.dispatchEvent(
-        new CustomEvent("show-toast", {
-          detail: { title: ok ? "Metadata Saved" : "Error", message: ok ? `"${editTitle}" updated successfully` : "Failed to save metadata", type: ok ? "success" : "error", duration: 2500 },
-        })
-      );
-      if (ok) await hapticSuccess();
-      setEditingFile(null);
-      setMediaActionLoading(false);
-    };
-
-    const cancelEdit = () => {
-      setEditingFile(null);
-    };
-
-    const handleDeleteFile = async () => {
-      if (!showMediaActions || mediaActionLoading) return;
-      setMediaActionLoading(true);
-      const file = stationFiles.find((f) => f.id === showMediaActions);
-      if (file) {
-        const fileId = file.unique_id || file.id;
-        const ok = await deleteFile(fileId);
-        if (ok) {
-          setStationFiles((prev) => prev.filter((f) => f.id !== file.id));
-        }
-        window.dispatchEvent(
-          new CustomEvent("show-toast", {
-            detail: { title: ok ? "File Deleted" : "Error", message: ok ? "Track removed from media library" : "Failed to delete file", type: ok ? "success" : "error", duration: 2500 },
-          })
-        );
-        if (ok) await hapticSuccess();
-      }
-      setShowMediaActions(null);
-      setMediaActionLoading(false);
-    };
-
-    const handleBulkDelete = async () => {
-      if (selectedFileIds.size === 0 || mediaActionLoading) return;
-      setMediaActionLoading(true);
-      const filesToDelete = stationFiles.filter((f) => selectedFileIds.has(f.id));
-      const filePaths = filesToDelete.map((f) => f.path).filter(Boolean);
-      let ok = true;
-      if (filePaths.length > 0) {
-        ok = await deleteStationFiles(filePaths);
-      }
-      if (ok) {
-        setStationFiles((prev) => prev.filter((f) => !selectedFileIds.has(f.id)));
-      }
-      window.dispatchEvent(
-        new CustomEvent("show-toast", {
-          detail: { title: ok ? "Files Deleted" : "Error", message: ok ? `${selectedFileIds.size} tracks removed` : "Failed to delete files", type: ok ? "success" : "error", duration: 2500 },
-        })
-      );
-      if (ok) await hapticSuccess();
-      setSelectedFileIds(new Set());
-      setMediaActionLoading(false);
-    };
-
-    const handleBulkAddPlaylist = () => {
-      if (selectedFileIds.size === 0) return;
-      setPlaylistPickerOpen(true);
-    };
-
-    const addToPlaylist = async (playlistId: string) => {
-      if (mediaActionLoading) return;
-      setMediaActionLoading(true);
-      const pl = playlists.find((p) => p.id === playlistId);
-      const songIds = [...selectedFileIds].map((fid) => {
-        const file = stationFiles.find((f) => f.id === fid);
-        return file?.unique_id || fid;
-      }).filter(Boolean) as string[];
-      const ok = await apiAddSongs(playlistId, songIds);
-      if (ok) {
-        setStationFiles((prev) =>
-          prev.map((f) =>
-            selectedFileIds.has(f.id)
-              ? { ...f, playlists: f.playlists.includes(playlistId) ? f.playlists : [...f.playlists, playlistId] }
-              : f
-          )
-        );
-      }
-      window.dispatchEvent(
-        new CustomEvent("show-toast", {
-          detail: { title: ok ? "Added to Playlist" : "Error", message: ok ? `${selectedFileIds.size} tracks added to "${pl?.name || ""}"` : "Failed to add tracks to playlist", type: ok ? "success" : "error", duration: 2500 },
-        })
-      );
-      if (ok) await hapticSuccess();
-      setPlaylistPickerOpen(false);
-      setSelectedFileIds(new Set());
-      setMediaActionLoading(false);
-    };
-
-    const simulateUpload = async (files?: FileList) => {
-      if (files && files.length > 0) {
-        let successCount = 0;
-        let failCount = 0;
-        for (let i = 0; i < files.length; i++) {
-          const file = files[i];
-          const id = "upload_" + Date.now() + "_" + i;
-          setUploadProgress((prev) => [...prev, { id, name: file.name, progress: 0 }]);
-          const interval = setInterval(() => {
-            setUploadProgress((prev) =>
-              prev.map((u) =>
-                u.id === id && u.progress < 90
-                  ? { ...u, progress: u.progress + Math.random() * 6 + 1 }
-                  : u
-              )
-            );
-          }, 350);
-          const uploaded = await uploadFile(file).catch(() => null);
-          clearInterval(interval);
-          if (uploaded) {
-            successCount++;
-            setUploadProgress((prev) =>
-              prev.map((u) => (u.id === id ? { ...u, progress: 100 } : u))
-            );
-            setStationFiles((prev) => [...prev, uploaded]);
-          } else {
-            failCount++;
-            setUploadProgress((prev) => prev.filter((u) => u.id !== id));
-          }
-        }
-        if (successCount > 0) {
-          window.dispatchEvent(
-            new CustomEvent("show-toast", {
-              detail: { title: "Upload Complete", message: `${successCount} file${successCount > 1 ? "s" : ""} uploaded${failCount > 0 ? `, ${failCount} failed` : ""}`, type: failCount > 0 ? "error" : "success", duration: 3000 },
-            })
-          );
-          await hapticSuccess();
-        } else {
-          window.dispatchEvent(
-            new CustomEvent("show-toast", {
-              detail: { title: "Upload Failed", message: "Could not upload files to AzuraCast", type: "error", duration: 4000 },
-            })
-          );
-        }
-        return;
-      }
-      // Fallback: simulate upload with progress (for drag-drop without real files)
-      const id = "upload_" + Date.now();
-      const name = "New_Sermon.mp3";
-      setUploadProgress((prev) => [...prev, { id, name, progress: 0 }]);
-      const interval = setInterval(() => {
-        setUploadProgress((prev) =>
-          prev.map((u) =>
-            u.id === id ? { ...u, progress: Math.min(100, u.progress + Math.random() * 15 + 3) } : u
-          )
-        );
-      }, 300);
-      setTimeout(async () => {
-        clearInterval(interval);
-        setUploadProgress((prev) => prev.filter((u) => u.id !== id));
-        window.dispatchEvent(
-          new CustomEvent("show-toast", {
-            detail: { title: "Upload Complete", message: `"${name}" added to media library`, type: "success", duration: 3000 },
-          })
-        );
-        await hapticSuccess();
-      }, 3000);
-    };
-
-    return (
-      <div className="media-content">
-        {/* Upload Zone */}
-        <div
-          className={`upload-zone ${dragging ? "dragging" : ""}`}
-          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={(e) => { e.preventDefault(); setDragging(false); if (e.dataTransfer.files?.length) simulateUpload(e.dataTransfer.files); }}
-          onClick={() => document.getElementById("media-file-input")?.click()}
-        >
-          <i className={`fas ${dragging ? "fa-file-circle-plus" : "fa-cloud-arrow-up"}`}></i>
-          <div className="upload-zone-text">
-            <h4>{dragging ? "Drop files here" : "Tap to Upload or Drag & Drop"}</h4>
-            <p>MP3, AAC, OGG, FLAC — up to 50MB</p>
-          </div>
-          <input
-            id="media-file-input"
-            type="file"
-            accept="audio/*"
-            multiple
-            style={{ display: "none" }}
-            onChange={(e) => { if (e.target.files?.length) { simulateUpload(e.target.files); e.target.value = ""; } }}
-          />
-        </div>
-
-        {/* Upload Progress */}
-        {uploadProgress.length > 0 && (
-          <div className="upload-progress-list">
-            {uploadProgress.map((u) => (
-              <div className="upload-progress-item" key={u.id}>
-                <div className="upload-progress-info">
-                  <span className="upload-progress-name"><i className="fas fa-file-audio"></i> {u.name}</span>
-                  <span className="upload-progress-pct">{Math.round(u.progress)}%</span>
-                </div>
-                <div className="upload-progress-bar">
-                  <div className="upload-progress-fill" style={{ width: `${u.progress}%` }}></div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Search & Filter */}
-        <div className="media-toolbar">
-          <div className="media-search-wrapper">
-            <i className="fas fa-search"></i>
-            <input
-              type="text"
-              className="media-search-input"
-              placeholder="Search by title, artist, album..."
-              value={mediaSearch}
-              onChange={(e) => setMediaSearch(e.target.value)}
-            />
-            {mediaSearch && (
-              <button className="media-search-clear" onClick={() => setMediaSearch("")}>
-                <i className="fas fa-xmark"></i>
-              </button>
-            )}
-          </div>
-          <select
-            className="media-filter-select"
-            value={mediaFilterPlaylist}
-            onChange={(e) => setMediaFilterPlaylist(e.target.value)}
-          >
-            <option value="">All Playlists</option>
-            {playlists.map((pl) => (
-              <option key={pl.id} value={pl.id}>{pl.name}</option>
-            ))}
-          </select>
-        </div>
-
-        {/* Bulk Actions Bar */}
-        {selectedFileIds.size > 0 && (
-          <div className="media-bulk-bar">
-            <span className="media-bulk-count">{selectedFileIds.size} selected</span>
-            <div className="media-bulk-actions">
-              <button className="media-bulk-btn" onClick={handleBulkAddPlaylist} disabled={mediaActionLoading}>
-                {mediaActionLoading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-list"></i>} Add to Playlist
-              </button>
-              <button className="media-bulk-btn danger" onClick={handleBulkDelete} disabled={mediaActionLoading}>
-                {mediaActionLoading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-trash-can"></i>} Delete
-              </button>
-            </div>
-            <button className="media-bulk-clear" onClick={() => setSelectedFileIds(new Set())}>
-              <i className="fas fa-xmark"></i>
-            </button>
-          </div>
-        )}
-
-        {/* File Count */}
-        <div className="media-count">
-          {filteredFiles.length} of {stationFiles.length} files
-        </div>
-
-        {/* File List */}
-        <div className="media-file-list">
-          {filteredFiles.length === 0 ? (
-            <div className="media-empty">
-              <i className="fas fa-music"></i>
-              <p>No files found matching your search</p>
-            </div>
-          ) : (
-            filteredFiles.map((file) => {
-              const isEditing = editingFile === file.id;
-              const isSelected = selectedFileIds.has(file.id);
-              return (
-                <div className={`media-file-item ${isSelected ? "selected" : ""}`} key={file.id}>
-                  {/* Checkbox */}
-                  <div
-                    className={`media-checkbox ${isSelected ? "checked" : ""}`}
-                    onClick={() => toggleFileSelect(file.id)}
-                  >
-                    {isSelected && <i className="fas fa-check"></i>}
-                  </div>
-
-                  {/* Album Art */}
-                  <div className="media-file-cover">
-                    <img src={file.albumArt || "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=60&h=60&fit=crop"} alt={file.title} />
-                  </div>
-
-                  {/* File Info */}
-                  <div className="media-file-info">
-                    {isEditing ? (
-                      <div className="media-edit-fields">
-                        <input
-                          className="media-edit-input"
-                          value={editTitle}
-                          onChange={(e) => setEditTitle(e.target.value)}
-                          placeholder="Title"
-                          autoFocus
-                        />
-                        <input
-                          className="media-edit-input"
-                          value={editArtist}
-                          onChange={(e) => setEditArtist(e.target.value)}
-                          placeholder="Artist"
-                        />
-                        <input
-                          className="media-edit-input"
-                          value={editAlbum}
-                          onChange={(e) => setEditAlbum(e.target.value)}
-                          placeholder="Album"
-                        />
-                        <div className="media-edit-actions">
-                          <button className="media-edit-save" onClick={saveEdit} disabled={mediaActionLoading}>
-                            {mediaActionLoading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-check"></i>} Save
-                          </button>
-                          <button className="media-edit-cancel" onClick={cancelEdit} disabled={mediaActionLoading}>
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="media-file-title">{file.title}</div>
-                        <div className="media-file-artist">{file.artist} · {file.album}</div>
-                        <div className="media-file-tags">
-                          <span className="media-file-tag">{file.genre}</span>
-                          <span className="media-file-tag">{file.duration}</span>
-                          <span className="media-file-tag">{file.size}</span>
-                        </div>
-                        <div className="media-file-playlists">
-                          {file.playlists.map((plId) => {
-                            const pl = playlists.find((p) => p.id === plId);
-                            return pl ? (
-                              <span className="media-playlist-chip" key={plId}>{pl.name}</span>
-                            ) : null;
-                          })}
-                        </div>
-                      </>
-                    )}
-                  </div>
-
-                  {/* Actions */}
-                  <div className="media-file-actions-relative">
-                    <button
-                      className="media-file-menu"
-                      onClick={(e) => {
-                        if (showMediaActions === file.id) {
-                          setShowMediaActions(null);
-                          setMenuPos(null);
-                        } else {
-                          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                          setMenuPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
-                          setShowMediaActions(file.id);
-                        }
-                      }}
-                    >
-                      <i className="fas fa-ellipsis-h"></i>
-                    </button>
-
-                    {showMediaActions === file.id && menuPos && (
-                      <>
-                        <div className="media-actions-overlay" onClick={() => { setShowMediaActions(null); setMenuPos(null); }}></div>
-                        <div className="media-actions-sheet" style={{ position: "fixed", top: menuPos.top, right: menuPos.right, left: "auto", bottom: "auto" }}>                          <button className="media-action-btn" onClick={() => { startEdit(file); setShowMediaActions(null); setMenuPos(null); }}>
-                            <span className="media-action-icon blue"><i className="fas fa-pen"></i></span>
-                            <div className="media-action-info">
-                              <h4>Edit Metadata</h4>
-                              <p>Change title, artist, album, genre</p>
-                            </div>
-                          </button>
-                          <button className="media-action-btn" onClick={() => { setSelectedFileIds(new Set([file.id])); setPlaylistPickerOpen(true); setShowMediaActions(null); setMenuPos(null); }}>
-                            <span className="media-action-icon gold"><i className="fas fa-list"></i></span>
-                            <div className="media-action-info">
-                              <h4>Add to Playlist</h4>
-                              <p>Include in a program rotation</p>
-                            </div>
-                          </button>
-                          <button className="media-action-btn" onClick={() => { handleDeleteFile(); setMenuPos(null); }} disabled={mediaActionLoading}>
-                            <span className="media-action-icon red">{mediaActionLoading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-trash-can"></i>}</span>
-                            <div className="media-action-info">
-                              <h4>Delete</h4>
-                              <p>Permanently remove this file</p>
-                            </div>
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
-
-        {/* Playlist Picker Modal */}
-        {playlistPickerOpen && (
-          <>
-            <div className="media-modal-overlay" onClick={() => setPlaylistPickerOpen(false)}></div>
-            <div className="media-modal-sheet">
-              <div className="media-modal-handle"></div>
-              <div className="media-modal-header">
-                <h2>Add to Playlist</h2>
-                <p>Select a playlist for {selectedFileIds.size} track{selectedFileIds.size !== 1 ? "s" : ""}</p>
-              </div>
-              <div className="media-modal-body">
-                {playlists.map((pl) => (
-                  <div
-                    className="media-pl-item"
-                    key={pl.id}
-                    onClick={() => addToPlaylist(pl.id)}
-                    style={{ opacity: mediaActionLoading ? 0.6 : 1, pointerEvents: mediaActionLoading ? "none" : "auto" }}
-                  >
-                    <div className="media-pl-icon">
-                      {mediaActionLoading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-list"></i>}
-                    </div>
-                    <div className="media-pl-info">
-                      <div className="media-pl-name">{pl.name}</div>
-                    </div>
-                    <i className="fas fa-chevron-right media-pl-arrow"></i>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </>
-        )}
-      </div>
-    );
-  };
-
-  // ========== PLAYLISTS SECTION ==========
-  const renderPlaylists = () => {
-    const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
-    const plSongsFor = (plId: string) =>
-      stationFiles.filter((f) => f.playlists.includes(plId));
-
-    const createPlaylist = async () => {
-      if (plActionLoading) return;
-      setPlActionLoading(true);
-      try {
-        const newPl = await apiCreatePlaylist({
-          name: plForm.name || "New Playlist",
-          type: plCreateType,
-          order: plCreateOrder,
-          weight: plForm.weight,
-          schedule: plCreateType === "scheduled"
-            ? { days: plSchedule.days.map((d: string) => DAYS.indexOf(d)), startTime: plSchedule.startTime, endTime: plSchedule.endTime }
-            : undefined,
-        });
-        setPlaylists([...playlists, newPl]);
-        setShowCreatePlaylist(false);
-        setPlForm({ name: "", type: "standard", order: "shuffle", weight: 10 });
-        setPlSchedule({ days: [], startTime: "09:00", endTime: "17:00" });
-        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Playlist Created", message: `"${newPl.name}" created successfully`, type: "success", duration: 2500 } }));
-        await hapticSuccess();
-      } catch {
-        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Error", message: "Failed to create playlist — try again", type: "error", duration: 3000 } }));
-      }
-      setPlActionLoading(false);
-    };
-
-    const saveEditedPlaylist = async () => {
-      if (!editingPlId || plActionLoading) return;
-      setPlActionLoading(true);
-      try {
-        const updated = await apiUpdatePlaylist(editingPlId, {
-          name: plForm.name,
-          type: plCreateType,
-          order: plCreateOrder,
-          weight: plForm.weight,
-          schedule: plCreateType === "scheduled"
-            ? { days: plSchedule.days.map((d: string) => DAYS.indexOf(d)), startTime: plSchedule.startTime, endTime: plSchedule.endTime }
-            : undefined,
-        });
-        setPlaylists(playlists.map((p) => p.id === editingPlId ? { ...p, ...updated } : p));
-        setShowEditPlModal(false);
-        setEditingPlId(null);
-        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Changes Saved", message: "Playlist updated", type: "success", duration: 2500 } }));
-        await hapticSuccess();
-      } catch {
-        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Error", message: "Failed to update playlist", type: "error", duration: 3000 } }));
-      }
-      setPlActionLoading(false);
-    };
-
-    const togglePlaylistEnabled = async (id: string) => {
-      if (plActionLoading) return;
-      setPlActionLoading(true);
-      try {
-        const updated = await apiTogglePlaylist(id);
-        setPlaylists(playlists.map((p) => p.id === id ? updated : p));
-        await hapticSuccess();
-      } catch {
-        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Error", message: "Failed to toggle playlist", type: "error", duration: 3000 } }));
-      }
-      setPlActionLoading(false);
-    };
-
-    const deletePlaylist = async (id: string) => {
-      if (plActionLoading) return;
-      setPlActionLoading(true);
-      try {
-        await apiDeletePlaylist(id);
-        setPlaylists(playlists.filter((p) => p.id !== id));
-        if (selectedPlId === id) setSelectedPlId(null);
-        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Playlist Deleted", message: "Playlist removed", type: "success", duration: 2500 } }));
-        await hapticSuccess();
-      } catch {
-        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Error", message: "Failed to delete playlist", type: "error", duration: 3000 } }));
-      }
-      setPlActionLoading(false);
-      setPlConfirmDelete(null);
-    };
-
-    const removeSongFromPlaylist = async (plId: string, songId: string) => {
-      if (plActionLoading) return;
-      setPlActionLoading(true);
-      const ok = await apiRemoveSong(plId, songId);
-      if (ok) {
-        setStationFiles(stationFiles.map((f) =>
-          f.id === songId ? { ...f, playlists: f.playlists.filter((p) => p !== plId) } : f
-        ));
-        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Song Removed", message: "Song removed from playlist", type: "success", duration: 2500 } }));
-      } else {
-        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Error", message: "Failed to remove song", type: "error", duration: 3000 } }));
-      }
-      setPlActionLoading(false);
-    };
-
-    const addSongsToPlaylist = async () => {
-      if (!addSongsPlId || addSongsSelected.size === 0 || plActionLoading) return;
-      setPlActionLoading(true);
-      try {
-        await apiAddSongs(addSongsPlId, [...addSongsSelected]);
-        setStationFiles(stationFiles.map((f) =>
-          addSongsSelected.has(f.id) && !f.playlists.includes(addSongsPlId)
-            ? { ...f, playlists: [...f.playlists, addSongsPlId] }
-            : f
-        ));
-        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Songs Added", message: `${addSongsSelected.size} songs added to playlist`, type: "success", duration: 2500 } }));
-        setShowSongPicker(false);
-        setAddSongsPlId(null);
-        setAddSongsSearch("");
-        setAddSongsSelected(new Set());
-      } catch {
-        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Error", message: "Something went wrong — try again", type: "error", duration: 3000 } }));
-      }
-      setPlActionLoading(false);
-    };
-
-    const toggleScheduleDay = (day: string) => {
-      setPlSchedule((prev) => ({
-        ...prev,
-        days: prev.days.includes(day) ? prev.days.filter((d) => d !== day) : [...prev.days, day],
-      }));
-    };
-
-    const refreshPlaylistData = async () => {
-      setLoadingPlaylists(true);
-      await Promise.all([
-        getPlaylists().then(setPlaylists),
-        getStationFiles().then(setStationFiles),
-      ]).catch(() => {}).finally(() => setLoadingPlaylists(false));
-    };
-
-    // Filter & status helpers
-    const countByType = (type: string) => type === "all" ? playlists.length : playlists.filter((p) => p.type === type).length;
-    const filteredByTab = playlists.filter((p) => plFilterTab === "all" || p.type === plFilterTab);
-    const filteredPlaylists = filteredByTab.filter(
-      (p) => !playlistFilter || p.name.toLowerCase().includes(playlistFilter.toLowerCase())
-    );
-    const getStatus = (pl: Playlist): "active" | "scheduled" | "general" | "disabled" => {
-      if (!pl.enabled) return "disabled";
-      if (pl.enabled && pl.type === "standard") return "general";
-      if (pl.type === "scheduled") return "scheduled";
-      return "general";
-    };
-
-    const selectedPl = selectedPlId ? playlists.find((p) => p.id === selectedPlId) : null;
-    const selectedSongs = selectedPl ? plSongsFor(selectedPl.id) : [];
-    const defaultPl = playlists.find((p) => p.name === "Default");
-    const scheduledPlaylists = playlists.filter((p) => p.type === "scheduled" && p.schedule);
-    const playlistColors: Record<string, string> = {};
-    scheduledPlaylists.forEach((pl, i) => {
-      const palette = ["#E8A838","#3B82F6","#8B5CF6","#10B981","#F43F5E","#14B8A6","#F97316"];
-      playlistColors[pl.id] = palette[i % palette.length];
-    });
-
-    // Open edit modal with pre-filled data
-    const openEditModal = (pl: Playlist) => {
-      setEditingPlId(pl.id);
-      setPlForm({ name: pl.name, type: pl.type, order: pl.order, weight: pl.weight });
-      setPlCreateType(pl.type);
-      setPlCreateOrder(pl.order);
-      if (pl.schedule) {
-        setPlSchedule({ days: pl.schedule.days.map((d) => DAYS[d] || DAYS[0]), startTime: pl.schedule.startTime, endTime: pl.schedule.endTime });
-      } else {
-        setPlSchedule({ days: [], startTime: "09:00", endTime: "17:00" });
-      }
-      setShowEditPlModal(true);
-    };
-
-    if (loadingPlaylists) {
-      return (
-        <div className="pl-content">
-          <div style={{ padding: "16px 0" }}>
-            <div className="skeleton-loading skeleton-line w40 h24" style={{ marginBottom: 16 }}></div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-              <div className="skeleton-loading skeleton-line w20 h32" style={{ borderRadius: 8 }}></div>
-              <div className="skeleton-loading skeleton-line w20 h32" style={{ borderRadius: 8 }}></div>
-              <div className="skeleton-loading skeleton-line w20 h32" style={{ borderRadius: 8 }}></div>
-            </div>
-            {[1,2,3].map((i) => (
-              <div key={i} className="skeleton-card" style={{ padding: 14, marginBottom: 10, display: "flex", alignItems: "center", gap: 12 }}>
-                <div className="skeleton-loading" style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0 }}></div>
-                <div style={{ flex: 1 }}>
-                  <div className="skeleton-loading skeleton-line w60 h20" style={{ marginBottom: 6 }}></div>
-                  <div className="skeleton-loading skeleton-line w40"></div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      );
-    }
-
-    const nowPlayingPlaylistId = pcActivePlaylist;
-
-    return (
-      <div className="pl-content-new">
-        {/* Top Header */}
-        <div className="pl-new-header">
-          <h2 className="pl-new-heading">Playlists</h2>
-          <button className="pl-create-btn" onClick={() => { setShowCreatePlaylist(true); setPlCreateType("standard"); setPlCreateOrder("shuffle"); setPlForm({ name: "", type: "standard", order: "shuffle", weight: 10 }); setPlSchedule({ days: [], startTime: "09:00", endTime: "17:00" }); }}>
-            <i className="fas fa-plus"></i> New Playlist
-          </button>
-        </div>
-
-        {/* Filter Tabs */}
-        <div className="pl-filter-tabs">
-          {[
-            { id: "all", label: "All" },
-            { id: "scheduled", label: "Scheduled" },
-            { id: "standard", label: "General" },
-            { id: "on_demand", label: "On Demand" },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              className={`pl-filter-tab ${plFilterTab === tab.id ? "active" : ""}`}
-              onClick={() => { setPlFilterTab(tab.id); setSelectedPlId(null); }}
-            >
-              {tab.label}
-              {countByType(tab.id) > 0 && <span className="pl-filter-count">{countByType(tab.id)}</span>}
-            </button>
-          ))}
-          <div className="pl-search-wrapper" style={{ marginLeft: "auto", maxWidth: 200 }}>
-            <i className="fas fa-search"></i>
-            <input type="text" className="pl-search-input" placeholder="Search..." value={playlistFilter}
-              onChange={(e) => setPlaylistFilter(e.target.value)} />
-          </div>
-        </div>
-
-        {/* Schedule View Toggle (only when Scheduled tab is active) */}
-        {plFilterTab === "scheduled" && (
-          <div className="pl-sched-view-toggle">
-            <button
-              className={`pl-sched-toggle-btn ${showScheduleView ? "active" : ""}`}
-              onClick={() => setShowScheduleView(!showScheduleView)}
-            >
-              <i className={`fas ${showScheduleView ? "fa-list" : "fa-calendar-week"}`}></i>
-              {showScheduleView ? "List View" : "Schedule View"}
-            </button>
-          </div>
-        )}
-
-        {/* Schedule View (calendar grid) */}
-        {plFilterTab === "scheduled" && showScheduleView && (
-          <div className="pl-schedule-view">
-            <div className="pl-sv-header">
-              <h3 className="pl-sv-title">Weekly Schedule</h3>
-            </div>
-            <div className="pl-sv-grid-wrapper">
-              <div className="pl-sv-grid">
-                {/* Time labels column + 7 day columns */}
-                <div className="pl-sv-corner"></div>
-                {DAYS.map((d, i) => {
-                  const todayIdx = new Date().getDay();
-                  const dayNum = i === 6 ? 0 : i + 1;
-                  const isToday = dayNum === todayIdx;
-                  return (
-                    <div key={d} className={`pl-sv-day-header ${isToday ? "today" : ""}`}>
-                      {d}
-                    </div>
-                  );
-                })}
-                {/* 24 hour rows */}
-                {Array.from({ length: 24 }, (_, hour) => (
-                  <React.Fragment key={hour}>
-                    <div className="pl-sv-time">{hour === 0 ? "12AM" : hour < 12 ? `${hour}AM` : hour === 12 ? "12PM" : `${hour - 12}PM`}</div>
-                    {DAYS.map((d, dayIdx) => {
-                      const dayNum = dayIdx === 6 ? 0 : dayIdx + 1;
-                      const todayIdx = new Date().getDay();
-                      const isToday = dayNum === todayIdx;
-                      const hourStart = `${String(hour).padStart(2, "0")}:00`;
-                      const hourEnd = `${String(hour + 1).padStart(2, "0")}:00`;
-                      const blocks = scheduledPlaylists.filter((pl) => {
-                        if (!pl.schedule) return false;
-                        return pl.schedule.days.includes(dayNum) &&
-                          pl.schedule.startTime <= hourEnd &&
-                          pl.schedule.endTime > hourStart;
-                      });
-                      return (
-                        <div key={`${d}-${hour}`} className={`pl-sv-cell ${isToday ? "today" : ""} ${blocks.length > 0 ? "has-block" : ""}`}
-                          style={blocks.length > 0 ? { background: `rgba(232,168,56,${Math.min(0.08 * blocks.length, 0.25)})` } : {}}>
-                          {blocks.map((pl) => (
-                            <div
-                              key={pl.id}
-                              className="pl-sv-block"
-                              style={{ background: playlistColors[pl.id] || "#E8A838" }}
-                              title={`${pl.name} (${pl.schedule!.startTime} - ${pl.schedule!.endTime})`}
-                              onClick={() => setSelectedPlId(pl.id)}
-                            >
-                              {pl.name}
-                            </div>
-                          ))}
-                        </div>
-                      );
-                    })}
-                  </React.Fragment>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Two-Panel Layout (only when not showing schedule view, or when not on scheduled tab) */}
-        {!(plFilterTab === "scheduled" && showScheduleView) && (
-        <div className="pl-two-panel">
-          {/* LEFT PANEL */}
-          <div className={`pl-left-panel ${selectedPlId ? "pl-left-compact" : ""}`}>
-            {playlists.length === 0 ? (
-              <div className="pl-empty-state">
-                <i className="fas fa-list"></i>
-                <h4>No playlists yet</h4>
-                <p>Create your first playlist to start organizing your music</p>
-                <button className="pl-create-btn" onClick={() => { setShowCreatePlaylist(true); setPlCreateType("standard"); setPlForm({ name: "", type: "standard", order: "shuffle", weight: 10 }); }}>
-                  <i className="fas fa-plus"></i> Create Playlist
-                </button>
-              </div>
-            ) : filteredPlaylists.length === 0 ? (
-              <div className="pl-empty-state">
-                <i className="fas fa-filter"></i>
-                <p>No playlists match this filter</p>
-              </div>
-            ) : (
-              <div className="pl-card-list">
-                {filteredPlaylists.map((pl) => {
-                  const isSelected = selectedPlId === pl.id;
-                  const isPlaying = nowPlayingPlaylistId === pl.id;
-                  const status = getStatus(pl);
-                  const songs = plSongsFor(pl.id);
-                  const totalDuration = songs.reduce((acc, s) => {
-                    const mins = parseInt(s.duration) || 0;
-                    return acc + mins;
-                  }, 0);
-                  return (
-                    <div
-                      key={pl.id}
-                      className={`pl-card-new ${isSelected ? "selected" : ""} ${isPlaying ? "now-playing" : ""} ${pl.name === "Default" ? "default" : ""}`}
-                      onClick={() => setSelectedPlId(isSelected ? null : pl.id)}
-                    >
-                      <div className={`pl-card-status-dot ${status}`}></div>
-                      <div className="pl-card-new-body">
-                        <div className="pl-card-new-top">
-                          <div className="pl-card-new-name">{pl.name}</div>
-                          <span className={`pl-type-badge ${pl.type}`}>{pl.type === "on_demand" ? "On Demand" : pl.type === "scheduled" ? "Scheduled" : "General"}</span>
-                        </div>
-                        <div className="pl-card-new-meta">
-                          {pl.songCount} songs
-                          {pl.schedule && <span> · {pl.schedule.days.map((d: number) => DAYS[d] || DAYS[0]).join(", ")} · {pl.schedule.startTime}–{pl.schedule.endTime}</span>}
-                          {!pl.schedule && <span> · {pl.type === "standard" ? "Always playing as fallback" : "Triggered manually"}</span>}
-                        </div>
-                        {pl.name === "Default" && (
-                          <div className="pl-card-new-tag">
-                            <i className="fas fa-thumbtack"></i> Fallback playlist — always keep active
-                          </div>
-                        )}
-                      </div>
-                      <div className="pl-card-new-actions" onClick={(e) => e.stopPropagation()}>
-                        <button className="pl-card-edit-btn" onClick={() => openEditModal(pl)}>
-                          <i className="fas fa-pen"></i>
-                        </button>
-                        <div className="pl-card-menu-wrapper">
-                          <button className="pl-card-menu-btn" onClick={() => setPlMenuOpen(plMenuOpen === pl.id ? null : pl.id)}>
-                            <i className="fas fa-ellipsis"></i>
-                          </button>
-                          {plMenuOpen === pl.id && (
-                            <>
-                              <div className="pl-menu-overlay" onClick={() => setPlMenuOpen(null)}></div>
-                              <div className="pl-menu-dropdown">
-                                <button className="pl-menu-item" onClick={() => { togglePlaylistEnabled(pl.id); setPlMenuOpen(null); }}>
-                                  <i className={`fas ${pl.enabled ? "fa-pause" : "fa-play"}`}></i>
-                                  {pl.enabled ? "Disable" : "Enable"}
-                                </button>
-                                {pl.name !== "Default" && (
-                                  <button className="pl-menu-item danger" onClick={() => { setPlConfirmDelete(pl.id); setPlMenuOpen(null); }}>
-                                    <i className="fas fa-trash-can"></i> Delete
-                                  </button>
-                                )}
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                      {isPlaying && <div className="pl-card-now-playing-badge">Now Playing</div>}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* RIGHT PANEL */}
-          {selectedPl && (
-            <div className="pl-right-panel">
-              {/* Header */}
-              <div className="pl-detail-header">
-                <button className="pl-detail-back" onClick={() => setSelectedPlId(null)}>
-                  <i className="fas fa-chevron-left"></i>
-                </button>
-                <div className="pl-detail-header-info">
-                  <div className="pl-detail-name">{selectedPl.name}</div>
-                  <span className={`pl-type-badge ${selectedPl.type}`}>{selectedPl.type === "on_demand" ? "On Demand" : selectedPl.type === "scheduled" ? "Scheduled" : "General"}</span>
-                </div>
-                <div className="pl-detail-header-actions">
-                  <label className="pl-toggle">
-                    <input type="checkbox" checked={selectedPl.enabled} disabled={plActionLoading}
-                      onChange={() => togglePlaylistEnabled(selectedPl.id)} />
-                    <span className="pl-toggle-slider"></span>
-                  </label>
-                  <button className="pl-detail-edit-btn" onClick={() => openEditModal(selectedPl)}>
-                    <i className="fas fa-pen"></i> Edit
-                  </button>
-                </div>
-              </div>
-
-              {/* Schedule Block */}
-              {selectedPl.schedule && (
-                <div className="pl-detail-schedule">
-                  <div className="pl-detail-section-title"><i className="fas fa-calendar"></i> Schedule</div>
-                  <div className="pl-detail-schedule-body">
-                    <div className="pl-detail-days">
-                      {DAYS.map((d) => (
-                        <span key={d} className={`pl-detail-day-pill ${selectedPl.schedule!.days.includes(DAYS.indexOf(d)) ? "active" : ""}`}>{d}</span>
-                      ))}
-                    </div>
-                    <div className="pl-detail-time">
-                      {selectedPl.schedule.startTime} → {selectedPl.schedule.endTime}
-                    </div>
-                    <div className="pl-detail-next-run">
-                      <i className="fas fa-hourglass-half"></i> Next run: Scheduled daily
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Songs Section */}
-              <div className="pl-detail-songs">
-                <div className="pl-detail-songs-header">
-                  <span className="pl-detail-section-title"><i className="fas fa-music"></i> Songs ({selectedSongs.length})</span>
-                  <button className="pl-detail-add-songs-btn" onClick={() => { setAddSongsPlId(selectedPl.id); setAddSongsSearch(""); setAddSongsSelected(new Set()); setShowSongPicker(true); }}>
-                    <i className="fas fa-plus"></i> Add Songs
-                  </button>
-                </div>
-
-                {selectedSongs.length === 0 ? (
-                  <div className="pl-detail-empty-songs">
-                    <i className="fas fa-music"></i>
-                    <p>No songs yet</p>
-                    <span>Tap "+ Add Songs" to add music to this playlist</span>
-                  </div>
-                ) : (
-                  <div className="pl-detail-song-list">
-                    {selectedSongs.map((song, idx) => (
-                      <div className="pl-detail-song-item" key={song.id}>
-                        <span className="pl-detail-song-drag"><i className="fas fa-grip-vertical"></i></span>
-                        <img className="pl-detail-song-cover" src={song.albumArt || "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=40&h=40&fit=crop"} alt={song.title} />
-                        <div className="pl-detail-song-info">
-                          <div className="pl-detail-song-title">{song.title}</div>
-                          <div className="pl-detail-song-artist">{song.artist || "Unknown Artist"}</div>
-                        </div>
-                        <span className="pl-detail-song-duration">{song.duration}</span>
-                        <button className="pl-detail-song-remove" onClick={() => removeSongFromPlaylist(selectedPl.id, song.id)} title="Remove">
-                          <i className="fas fa-xmark"></i>
-                        </button>
-                      </div>
-                    ))}
-                    <div className="pl-detail-total-duration">
-                      Total duration: {Math.floor(selectedSongs.reduce((acc, s) => acc + (parseInt(s.duration) || 0), 0) / 60)} mins {selectedSongs.reduce((acc, s) => acc + (parseInt(s.duration) || 0), 0) % 60} secs
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-        )}
-
-        {/* ========== CREATE / EDIT MODAL ========== */}
-        {(showCreatePlaylist || showEditPlModal) && (
-          <>
-            <div className="media-modal-overlay" onClick={() => { setShowCreatePlaylist(false); setShowEditPlModal(false); setEditingPlId(null); }}></div>
-            <div className="media-modal-sheet">
-              <div className="media-modal-handle"></div>
-              <div className="media-modal-header">
-                <h2>{showEditPlModal ? "Edit Playlist" : "Create New Playlist"}</h2>
-                <button className="media-modal-close" onClick={() => { setShowCreatePlaylist(false); setShowEditPlModal(false); setEditingPlId(null); }}><i className="fas fa-xmark"></i></button>
-              </div>
-              <div className="media-modal-body" style={{ padding: "0 20px 20px" }}>
-                {/* Name */}
-                <div className="pl-form-row" style={{ marginBottom: 14 }}>
-                  <label>Playlist Name</label>
-                  <input type="text" className="pl-form-input" value={plForm.name} maxLength={100}
-                    onChange={(e) => setPlForm({ ...plForm, name: e.target.value })} placeholder="e.g. Morning Devotion" />
-                </div>
-
-                {/* Type */}
-                <div className="pl-form-row" style={{ marginBottom: 14 }}>
-                  <label>Type</label>
-                  <div className="pl-type-options">
-                    <label className={`pl-type-option ${plCreateType === "standard" ? "active" : ""}`}>
-                      <input type="radio" name="plType" checked={plCreateType === "standard"} onChange={() => setPlCreateType("standard")} />
-                      <span className="pl-type-option-label">General Rotation</span>
-                      <span className="pl-type-option-desc">Always plays as fallback</span>
-                    </label>
-                    <label className={`pl-type-option ${plCreateType === "scheduled" ? "active" : ""}`}>
-                      <input type="radio" name="plType" checked={plCreateType === "scheduled"} onChange={() => setPlCreateType("scheduled")} />
-                      <span className="pl-type-option-label">Scheduled</span>
-                      <span className="pl-type-option-desc">Plays at set times</span>
-                    </label>
-                    <label className={`pl-type-option ${plCreateType === "on_demand" ? "active" : ""}`}>
-                      <input type="radio" name="plType" checked={plCreateType === "on_demand"} onChange={() => setPlCreateType("on_demand")} />
-                      <span className="pl-type-option-label">On Demand</span>
-                      <span className="pl-type-option-desc">Triggered manually</span>
-                    </label>
-                  </div>
-                </div>
-
-                {/* Play Order */}
-                <div className="pl-form-row" style={{ marginBottom: 14 }}>
-                  <label>Play Order</label>
-                  <div className="pl-order-options">
-                    <label className={`pl-order-option ${plCreateOrder === "shuffle" ? "active" : ""}`}>
-                      <input type="radio" name="plOrder" checked={plCreateOrder === "shuffle"} onChange={() => setPlCreateOrder("shuffle")} />
-                      <span>Shuffle</span>
-                    </label>
-                    <label className={`pl-order-option ${plCreateOrder === "sequential" ? "active" : ""}`}>
-                      <input type="radio" name="plOrder" checked={plCreateOrder === "sequential"} onChange={() => setPlCreateOrder("sequential")} />
-                      <span>Sequential</span>
-                    </label>
-                  </div>
-                </div>
-
-                {/* Weight */}
-                <div className="pl-form-row" style={{ marginBottom: 14 }}>
-                  <label>Weight ({plForm.weight})</label>
-                  <input type="range" min="1" max="20" className="pl-form-range" value={plForm.weight}
-                    onChange={(e) => setPlForm({ ...plForm, weight: parseInt(e.target.value) })} />
-                </div>
-
-                {/* Schedule (only for scheduled) */}
-                {plCreateType === "scheduled" && (
-                  <div className="pl-schedule-config" style={{ marginBottom: 14 }}>
-                    <label>Schedule</label>
-                    <div className="pl-day-chips">
-                      {DAYS.map((d) => (
-                        <button key={d} className={`pl-day-chip ${plSchedule.days.includes(d) ? "active" : ""}`}
-                          onClick={() => toggleScheduleDay(d)}>{d}</button>
-                      ))}
-                    </div>
-                    <div className="pl-time-row" style={{ marginTop: 10 }}>
-                      <div>
-                        <label>Start Time</label>
-                        <input type="time" className="pl-form-input" value={plSchedule.startTime}
-                          onChange={(e) => setPlSchedule({ ...plSchedule, startTime: e.target.value })} />
-                      </div>
-                      <div>
-                        <label>End Time</label>
-                        <input type="time" className="pl-form-input" value={plSchedule.endTime}
-                          onChange={(e) => setPlSchedule({ ...plSchedule, endTime: e.target.value })} />
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Actions */}
-                <div className="pl-form-actions" style={{ justifyContent: "flex-end", marginTop: 8 }}>
-                  {showEditPlModal && (
-                    <button className="pl-form-danger" onClick={() => { setPlConfirmDelete(editingPlId); }} disabled={plActionLoading || editingPlId ? playlists.find(p => p.id === editingPlId)?.name === "Default" : false}>
-                      <i className="fas fa-trash-can"></i> Delete
-                    </button>
-                  )}
-                  <button className="pl-form-cancel" onClick={() => { setShowCreatePlaylist(false); setShowEditPlModal(false); setEditingPlId(null); }} disabled={plActionLoading}>
-                    Cancel
-                  </button>
-                  <button className="pl-form-save" onClick={showEditPlModal ? saveEditedPlaylist : createPlaylist}
-                    disabled={plActionLoading || !plForm.name.trim()}>
-                    {plActionLoading ? <i className="fas fa-spinner fa-spin"></i> : null}
-                    {plActionLoading ? " Saving..." : showEditPlModal ? "Save Changes" : "Create Playlist"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* ========== CONFIRM DELETE DIALOG ========== */}
-        {plConfirmDelete && (
-          <>
-            <div className="media-modal-overlay" onClick={() => setPlConfirmDelete(null)}></div>
-            <div className="media-modal-sheet" style={{ maxWidth: 360 }}>
-              <div className="media-modal-handle"></div>
-              <div className="media-modal-header">
-                <h2>Delete Playlist?</h2>
-              </div>
-              <div className="media-modal-body" style={{ padding: "0 20px 20px", textAlign: "center" }}>
-                <p style={{ fontSize: 14, color: "var(--text-secondary)", margin: "8px 0 16px" }}>
-                  This will permanently remove "{playlists.find(p => p.id === plConfirmDelete)?.name}" and remove it from the rotation.
-                </p>
-                <div className="pl-form-actions" style={{ justifyContent: "center" }}>
-                  <button className="pl-form-cancel" onClick={() => setPlConfirmDelete(null)}>Cancel</button>
-                  <button className="pl-form-danger" onClick={() => deletePlaylist(plConfirmDelete)} disabled={plActionLoading}>
-                    {plActionLoading ? <i className="fas fa-spinner fa-spin"></i> : null}
-                    {plActionLoading ? " Deleting..." : "Delete"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* ========== ADD SONGS MODAL ========== */}
-        {showSongPicker && (
-          <>
-            <div className="media-modal-overlay" onClick={() => { setShowSongPicker(false); setAddSongsPlId(null); setAddSongsSearch(""); setAddSongsSelected(new Set()); }}></div>
-            <div className="media-modal-sheet">
-              <div className="media-modal-handle"></div>
-              <div className="media-modal-header">
-                <h2>Add Songs to {playlists.find(p => p.id === addSongsPlId)?.name || "Playlist"}</h2>
-                <button className="media-modal-close" onClick={() => { setShowSongPicker(false); setAddSongsPlId(null); setAddSongsSearch(""); setAddSongsSelected(new Set()); }}><i className="fas fa-xmark"></i></button>
-              </div>
-              <div className="pl-picker-toolbar">
-                <i className="fas fa-search"></i>
-                <input type="text" className="pl-picker-search" placeholder="Search songs..." value={addSongsSearch}
-                  onChange={(e) => setAddSongsSearch(e.target.value)} />
-              </div>
-              <div className="media-modal-body">
-                {stationFiles.length === 0 ? (
-                  <div style={{ textAlign: "center", padding: 20, color: "#888" }}>
-                    <i className="fas fa-music" style={{ fontSize: 28, marginBottom: 8, opacity: 0.4 }}></i>
-                    <div>No media files found. Upload music first.</div>
-                  </div>
-                ) : (
-                  stationFiles
-                    .filter((s) => !addSongsSearch || s.title.toLowerCase().includes(addSongsSearch.toLowerCase()) || s.artist?.toLowerCase().includes(addSongsSearch.toLowerCase()))
-                    .map((song) => {
-                      const alreadyInPlaylist = addSongsPlId && song.playlists.includes(addSongsPlId);
-                      const isChecked = addSongsSelected.has(song.id);
-                      return (
-                        <div
-                          className={`pl-picker-item ${alreadyInPlaylist ? "disabled" : ""} ${isChecked ? "selected" : ""}`}
-                          key={song.id}
-                          onClick={() => {
-                            if (alreadyInPlaylist) return;
-                            const next = new Set(addSongsSelected);
-                            if (next.has(song.id)) next.delete(song.id);
-                            else next.add(song.id);
-                            setAddSongsSelected(next);
-                          }}
-                        >
-                          <div className={`pl-picker-checkbox ${isChecked ? "checked" : ""}`}>
-                            {isChecked && <i className="fas fa-check"></i>}
-                          </div>
-                          <img className="pl-picker-cover" src={song.albumArt || "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=40&h=40&fit=crop"} alt={song.title} />
-                          <div className="pl-picker-info">
-                            <div className="pl-picker-title">{song.title}</div>
-                            <div className="pl-picker-artist">{song.artist || "Unknown"} · {song.duration}</div>
-                          </div>
-                          {alreadyInPlaylist && <span className="pl-picker-already">In playlist</span>}
-                        </div>
-                      );
-                    })
-                )}
-              </div>
-              <div className="pl-picker-footer">
-                <span className="pl-picker-count">{addSongsSelected.size} song{addSongsSelected.size !== 1 ? "s" : ""} selected</span>
-                <div className="pl-form-actions">
-                  <button className="pl-form-cancel" onClick={() => { setShowSongPicker(false); setAddSongsPlId(null); setAddSongsSearch(""); setAddSongsSelected(new Set()); }}>Cancel</button>
-                  <button className="pl-form-save" onClick={addSongsToPlaylist} disabled={addSongsSelected.size === 0 || plActionLoading}>
-                    {plActionLoading ? <i className="fas fa-spinner fa-spin"></i> : null}
-                    {plActionLoading ? " Adding..." : "Add to Playlist"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </>
-        )}
-      </div>
-    );
-  };
-
-  // ========== GO LIVE SECTION ==========
-  const renderGoLive = () => {
-    return (
-      <div className="golive-content">
-        <div className="section-block">
-          <div className="section-block-header">
-            <h3><i className="fas fa-microphone" style={{ marginRight: 6 }}></i>Broadcast Studio</h3>
-          </div>
-          <div className="golive-embed-wrapper">
-            <iframe
-              src="https://azuracast.histoview.co.ke/public/turningpoint_church/dj"
-              style={{ width: "100%", height: "100%", border: "none", display: "block" }}
-              title="Broadcast Studio"
-              allow="microphone; autoplay; clipboard-write"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
-            ></iframe>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // ========== RENDER CONTENT ==========
   const renderContent = () => {
     switch (activeTab) {
       case "overview": return renderOverview();
@@ -1709,7 +379,6 @@ export default function AdminRadioPage() {
       default: return renderOverview();
     }
   };
-
   return (
     <>
       <style>{`
@@ -2623,29 +1292,13 @@ export default function AdminRadioPage() {
         .pl-picker-already { font-size: 11px; color: var(--text-tertiary); font-weight: 500; flex-shrink: 0; }
         .pl-picker-footer { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; border-top: 1px solid var(--border); }
         .pl-picker-count { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
-        @media (max-width: 640px) {
+        @media (max-width: 767px) {
           .pl-two-panel { flex-direction: column; }
           .pl-left-compact { max-width: 100%; }
           .pl-detail-back { display: flex; }
           .pl-right-panel { margin-left: 0; }
           .pl-filter-tab { font-size: 12px; padding: 6px 10px; }
         }
-      
-          /* ========== SKELETON LOADERS ========== */
-          .skeleton-loading { background: linear-gradient(90deg, var(--surface) 25%, var(--surface-hover) 50%, var(--surface) 75%); background-size: 200% 100%; animation: shimmer 1.5s ease-in-out infinite; border-radius: var(--radius-md); }
-          .skeleton-line { height: 14px; width: 100%; margin-bottom: 8px; }
-          .skeleton-line.w60 { width: 60%; }
-          .skeleton-line.w40 { width: 40%; }
-          .skeleton-line.w80 { width: 80%; }
-          .skeleton-line.w30 { width: 30%; }
-          .skeleton-line.h24 { height: 24px; }
-          .skeleton-line.h40 { height: 40px; }
-          .skeleton-line.h100 { height: 100px; }
-          .skeleton-block { background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px; }
-          .skeleton-img { background: linear-gradient(90deg, var(--surface) 25%, var(--surface-hover) 50%, var(--surface) 75%); background-size: 200% 100%; animation: shimmer 1.5s ease-in-out infinite; border-radius: var(--radius-md); }
-          .skeleton-card { background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
-          @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-
           
           /* ========== SKELETON LOADERS ========== */
           .skeleton-loading { background: linear-gradient(90deg, var(--surface) 25%, var(--surface-hover) 50%, var(--surface) 75%); background-size: 200% 100%; animation: shimmer 1.5s ease-in-out infinite; border-radius: var(--radius-md); }
@@ -2664,26 +1317,174 @@ export default function AdminRadioPage() {
 
           /* ========== GO LIVE TAB ========== */
           .golive-content { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
-          .golive-external-btn {
-            display: inline-flex; align-items: center; gap: 6px;
-            padding: 8px 16px; border-radius: var(--radius-sm);
+
+          .gl-status-card {
+            display: flex; align-items: center; gap: 14px;
+            padding: 18px; background: var(--surface-card);
+            border: 1px solid var(--border); border-radius: var(--radius-lg);
+          }
+          .gl-status-left { display: flex; align-items: center; }
+          .gl-live-indicator {
+            display: flex; flex-direction: column; align-items: center; gap: 6px;
+            width: 64px; height: 64px; border-radius: var(--radius-md);
+            background: var(--surface-elevated); justify-content: center;
+          }
+          .gl-live-indicator.live { background: rgba(239,68,68,0.12); }
+          .gl-live-dot {
+            width: 12px; height: 12px; border-radius: 50%;
+            background: var(--text-tertiary);
+          }
+          .gl-live-dot.pulse { background: var(--error); animation: livePulse 1.5s ease-in-out infinite; }
+          .gl-live-label { font-size: 8px; font-weight: 700; letter-spacing: 1px; color: var(--text-tertiary); }
+          .gl-live-indicator.live .gl-live-label { color: var(--error); }
+          .gl-status-info { flex: 1; min-width: 0; }
+          .gl-status-title { font-size: 16px; font-weight: 700; }
+          .gl-status-sub { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+          .gl-listeners {
+            display: inline-flex; align-items: center; gap: 5px;
+            margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--primary);
+          }
+
+          .gl-player-container {
             background: var(--surface-card); border: 1px solid var(--border);
-            color: var(--primary); font-size: 12px; font-weight: 600;
-            cursor: pointer; text-decoration: none; transition: all 0.2s ease;
+            border-radius: var(--radius-lg); overflow: hidden;
           }
-          .golive-external-btn:active { background: var(--surface-hover); }
-          .golive-embed-wrapper {
-            position: relative;
-            width: 100%;
-            height: 600px;
-            border-radius: var(--radius-lg);
-            overflow: hidden;
-            background: var(--surface-card);
-            border: 1px solid var(--border);
+          .gl-player-header {
+            display: flex; align-items: center; gap: 8px;
+            padding: 12px 14px; border-bottom: 1px solid var(--border);
+            font-size: 13px; font-weight: 600;
           }
-          @media (max-width: 480px) {
-            .golive-embed-wrapper { height: calc(100vh - 320px); min-height: 400px; }
+          .gl-player-header i { color: var(--text-tertiary); font-size: 14px; }
+          .gl-player-badge {
+            margin-left: auto; display: flex; align-items: center; gap: 5px;
+            padding: 3px 10px; border-radius: 6px; font-size: 10px; font-weight: 700;
+            background: var(--surface-elevated); color: var(--text-tertiary);
           }
+          .gl-player-badge.live { background: rgba(239,68,68,0.12); color: var(--error); }
+          .gl-player-dot {
+            width: 6px; height: 6px; border-radius: 50%; background: var(--text-tertiary);
+          }
+          .gl-player-dot.pulse { background: var(--error); animation: livePulse 1.5s ease-in-out infinite; }
+          .gl-player-iframe {
+            width: 100%; height: 120px; border: none; display: block;
+          }
+          .gl-connection-box {
+            background: var(--surface-card); border: 1px solid var(--border);
+            border-radius: var(--radius-lg); overflow: hidden;
+          }
+          .gl-conn-row {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 12px 14px; border-bottom: 1px solid var(--border);
+            cursor: pointer; transition: background 0.15s ease;
+          }
+          .gl-conn-row:last-child { border-bottom: none; }
+          .gl-conn-row:active { background: var(--surface-hover); }
+          .gl-conn-label {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 13px; font-weight: 600; color: var(--text-secondary);
+          }
+          .gl-conn-label i { width: 16px; font-size: 13px; color: var(--text-tertiary); }
+          .gl-conn-value {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+          }
+          .gl-conn-value i { font-size: 13px; color: var(--text-tertiary); cursor: pointer; }
+          .gl-conn-value i:active { color: var(--primary); }
+          .gl-pw-input {
+            background: var(--surface-elevated); border: 1.5px solid var(--border);
+            border-radius: 6px; padding: 4px 8px; color: var(--text-primary);
+            font-size: 13px; font-weight: 700; font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            outline: none; width: 130px; text-align: center;
+          }
+          .gl-pw-input:focus { border-color: var(--primary); }
+          .gl-pw-toggle {
+            background: none; border: none; color: var(--text-tertiary);
+            cursor: pointer; font-size: 14px; padding: 0;
+          }
+          .gl-pw-toggle:active { color: var(--primary); }
+          .gl-conn-note {
+            display: flex; align-items: center; gap: 6px;
+            padding: 8px 0 0; font-size: 11px; color: var(--text-tertiary);
+          }
+          .gl-conn-note i { font-size: 12px; }
+
+          .gl-streamer-list { display: flex; flex-direction: column; gap: 6px; }
+          .gl-streamer-item.selected { border-color: var(--primary); border-left: 3px solid var(--primary); padding-left: 12px; }
+          .gl-streamer-check { margin-left: 4px; color: var(--success); font-size: 14px; }
+          .gl-streamer-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+          .gl-streamer-edit {
+            width: 28px; height: 28px; border-radius: 50%; border: none;
+            background: none; color: var(--text-tertiary); cursor: pointer;
+            font-size: 12px; display: flex; align-items: center; justify-content: center;
+          }
+          .gl-streamer-edit:active { background: var(--surface-elevated); color: var(--primary); }
+          .gl-streamer-item {
+            display: flex; align-items: center; gap: 10px;
+            padding: 12px 14px; background: var(--surface-card);
+            border: 1px solid var(--border); border-radius: var(--radius-md);
+            transition: all 0.2s ease;
+          }
+          .gl-streamer-item.live { border-color: rgba(239,68,68,0.2); background: rgba(239,68,68,0.03); }
+          .gl-streamer-status {
+            width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+            background: var(--text-tertiary);
+          }
+          .gl-streamer-status.live { background: var(--error); }
+          .gl-streamer-dot.pulse { animation: livePulse 1.5s ease-in-out infinite; }
+          .gl-streamer-info { flex: 1; min-width: 0; }
+          .gl-streamer-name { font-size: 14px; font-weight: 600; }
+          .gl-streamer-user { font-size: 12px; color: var(--text-tertiary); }
+          .gl-streamer-meta { flex-shrink: 0; }
+          .gl-streamer-live-tag {
+            padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700;
+            background: rgba(239,68,68,0.12); color: var(--error);
+          }
+          .gl-streamer-off-tag {
+            padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;
+            background: var(--surface-elevated); color: var(--text-tertiary);
+          }
+          .gl-streamer-delete {
+            width: 28px; height: 28px; border-radius: 50%; border: none;
+            background: none; color: var(--text-tertiary); cursor: pointer;
+            font-size: 13px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+          }
+          .gl-streamer-delete:active { background: rgba(239,68,68,0.1); color: var(--error); }
+          .gl-streamer-delete:disabled { opacity: 0.4; }
+
+          .gl-empty {
+            display: flex; flex-direction: column; align-items: center;
+            padding: 30px 0; text-align: center; gap: 6px;
+          }
+          .gl-empty i { font-size: 28px; color: var(--text-tertiary); opacity: 0.4; }
+          .gl-empty p { font-size: 15px; font-weight: 600; margin: 0; }
+          .gl-empty span { font-size: 13px; color: var(--text-tertiary); }
+
+          .gl-history-list { display: flex; flex-direction: column; gap: 4px; }
+          .gl-history-item {
+            display: flex; align-items: center; gap: 10px;
+            padding: 10px 12px; background: var(--surface-card);
+            border: 1px solid var(--border); border-radius: var(--radius-sm);
+          }
+          .gl-history-icon {
+            width: 32px; height: 32px; border-radius: var(--radius-sm);
+            background: rgba(232,168,56,0.08); color: var(--primary);
+            display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+          }
+          .gl-history-icon i { font-size: 14px; }
+          .gl-history-info { flex: 1; }
+          .gl-history-date { font-size: 13px; font-weight: 600; }
+          .gl-history-time { font-size: 11px; color: var(--text-tertiary); }
+
+          .gl-form-row { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+          .gl-form-row label { font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
+          .gl-form-note {
+            display: flex; align-items: flex-start; gap: 6px;
+            padding: 10px 12px; background: rgba(232,168,56,0.04);
+            border: 1px solid rgba(232,168,56,0.1); border-radius: var(--radius-sm);
+            font-size: 12px; color: var(--text-secondary); line-height: 1.4;
+          }
+          .gl-form-note i { font-size: 13px; color: var(--primary); margin-top: 1px; flex-shrink: 0; }
 
           `}</style>
 
@@ -2696,8 +1497,8 @@ export default function AdminRadioPage() {
         <header className="radio-header">
           <div className="radio-header-logo"><i className="fas fa-tower-broadcast"></i></div>
           <div className="radio-header-info">
-            <div className="radio-header-name">Turningpoint Radio</div>
-            <div className="radio-header-sub">Turningpoint Church Nakuru Radio Station</div>
+            <div className="radio-header-name">Kingdom Seekers Radio</div>
+            <div className="radio-header-sub">Kingdom Seekers Church Nakuru Radio Station</div>
           </div>
           <div className="radio-header-right">
             <div className={`on-air-badge ${isLive ? "live" : "off"}`}>

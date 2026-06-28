@@ -30,6 +30,7 @@ export interface YouTubeChannel {
   views: number;
   previousTotalViews: number;
   weeklyViews: number;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   syncedAt?: any;
 }
 
@@ -54,7 +55,9 @@ const liveDoc = () => doc(db, "youtube_live", "current");
 export interface YouTubeLiveStatus {
   isLive: boolean;
   video: YouTubeVideo | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   lastCheckedAt?: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   detectedAt?: any;
 }
 

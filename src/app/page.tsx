@@ -54,6 +54,7 @@ export default function LoginPage() {
           const evt = e as CustomEvent;
           const loginScreen = document.querySelector(".login-screen") as HTMLElement | null;
           if (loginScreen) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             loginScreen.style.paddingBottom = (evt as any).keyboardHeight + "px";
           }
           setTimeout(() => {

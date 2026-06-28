@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 
 interface BottomNavProps {
-  activeTab: "home" | "radio" | "watch" | "gallery";
+  activeTab: "home" | "radio" | "meetings" | "watch" | "gallery";
   showWatchBadge?: boolean;
   showLiveBadge?: boolean;
 }
@@ -35,6 +35,13 @@ export default function BottomNav({ activeTab, showWatchBadge = false, showLiveB
       >
         <i className="fas fa-radio"></i>
         <span>Radio</span>
+      </button>
+      <button
+        className={`nav-item${activeTab === "meetings" ? " active" : ""}`}
+        onClick={() => navigate("/meetings")}
+      >
+        <i className="fas fa-people-group"></i>
+        <span>Meetings</span>
       </button>
       <button
         className={`nav-item${activeTab === "watch" ? " active" : ""}`}

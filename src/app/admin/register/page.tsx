@@ -57,7 +57,7 @@ function RegisterForm() {
         email,
         display_name: name,
         photo_url: firebaseUser.photoURL || "",
-        church_id: process.env.NEXT_PUBLIC_CHURCH_ID || "turningpoint_church_nakuru",
+        church_id: process.env.NEXT_PUBLIC_CHURCH_ID || "kingdom_seekers_church_nakuru",
         role: "admin" as const,
         phone: "",
         is_verified: false,
@@ -79,14 +79,15 @@ function RegisterForm() {
       } catch (_) {}
 
       setSuccess(true);
-    } catch (err: any) {
-      const code = err.code;
+    } catch (err: unknown) {
+      const e = err as { code?: string; message?: string };
+      const code = e.code;
       if (code === "auth/email-already-in-use") {
         setError("This email is already registered.");
       } else if (code === "auth/weak-password") {
         setError("Password should be at least 6 characters");
       } else {
-        setError(err.message || "Registration failed");
+        setError(e.message || "Registration failed");
       }
     } finally {
       setIsLoading(false);

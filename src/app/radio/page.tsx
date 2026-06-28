@@ -30,6 +30,11 @@ export default function RadioPage() {
   const [lastRequestTime, setLastRequestTime] = useState<number | null>(null);
   const [cooldownLeft, setCooldownLeft] = useState(0);
   const [requestLoading, setRequestLoading] = useState(false);
+  const [currentTime, setCurrentTime] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setCurrentTime(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
   const [sessionId] = useState(() => `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
 
 
@@ -37,7 +42,7 @@ export default function RadioPage() {
   const audio = useAudio();
   const listenUrl = npData?.station?.listenUrl || `${getApiBase()}/listen/${getStationId()}/radio.mp3`;
   const embedUrl = `${getPublicPlayerUrl()}/embed`;
-  const stationName = settings?.name || "Turningpoint Radio";
+  const stationName = settings?.name || "Kingdom Seekers Radio";
   const ytLive = useYouTubeLive();
 
   // Push now-playing metadata to Android media notification
@@ -45,7 +50,7 @@ export default function RadioPage() {
     if (audio.isPlaying) {
       const np = npData?.nowPlaying;
       const title = np?.song?.title || stationName;
-      const artist = np?.song?.artist || "Turningpoint Church Nakuru";
+      const artist = np?.song?.artist || "Kingdom Seekers Church Nakuru";
       const albumArt = np?.song?.albumArt;
       audio.updateMediaSession(title, artist, albumArt);
     }
@@ -90,19 +95,19 @@ export default function RadioPage() {
   // Request cooldown timer
   useEffect(() => {
     if (!lastRequestTime) return;
-    const elapsed = Math.floor((Date.now() - lastRequestTime) / 1000);
+    const elapsed = Math.floor((currentTime - lastRequestTime) / 1000);
     const remaining = Math.max(0, 1800 - elapsed);
-    setCooldownLeft(remaining);
     if (remaining <= 0) return;
+    setTimeout(() => setCooldownLeft(remaining), 0);
     const interval = setInterval(() => {
-      const e = Math.floor((Date.now() - lastRequestTime) / 1000);
+      const e = Math.floor((currentTime - lastRequestTime) / 1000);
       setCooldownLeft(Math.max(0, 1800 - e));
     }, 1000);
     return () => clearInterval(interval);
   }, [lastRequestTime]);
 
   const handleRequest = async (fileId: string, songTitle: string, songArtist: string) => {
-    const now = Date.now();
+    const now = currentTime;
     if (lastRequestTime && (now - lastRequestTime) < 1800000) {
       const mins = Math.ceil((1800000 - (now - lastRequestTime)) / 60000);
       showToast("Cooldown Active", `Please wait ${mins} min before requesting again`, "warning", 3000);
@@ -846,7 +851,7 @@ export default function RadioPage() {
                           <div className={`sched-dot ${item.type}`}></div>
                           <div className="sched-info">
                             <div className="sched-name">{item.name}</div>
-                            <div className="sched-host">Turningpoint Church</div>
+                            <div className="sched-host">Kingdom Seekers Church</div>
                           </div>
                           <span className={`sched-type-badge ${item.type}`}>{item.type}</span>
                         </div>
@@ -884,7 +889,7 @@ export default function RadioPage() {
                   <div className="req-list">
                     {filteredRequests.map((file) => {
                       const alreadyRequested = requestedSongs.has(file.id);
-                      const onCooldown = lastRequestTime !== null && (Date.now() - lastRequestTime) < 1800000 && !alreadyRequested;
+                      const onCooldown = lastRequestTime !== null && (currentTime - lastRequestTime) < 1800000 && !alreadyRequested;
                       const isLoading = requestLoading;
                       let btnClass = "request";
                       let btnText = "Request";
@@ -995,7 +1000,7 @@ export default function RadioPage() {
                 </div>
 
                 <div className="about-footer">
-                  Powered by <strong>Turningpoint Church Nakuru</strong> · v1.0.0
+                  Powered by <strong>Kingdom Seekers Church Nakuru</strong> · v1.0.0
                 </div>
               </div>
             )}

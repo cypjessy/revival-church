@@ -4,7 +4,7 @@ import { useYouTubeLive } from "@/hooks/useYouTubeLive";
 import BottomNav from "./BottomNav";
 
 interface Props {
-  activeTab: "home" | "radio" | "watch" | "gallery";
+  activeTab: "home" | "radio" | "meetings" | "watch" | "gallery";
   showWatchBadge?: boolean;
 }
 

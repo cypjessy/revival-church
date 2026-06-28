@@ -32,7 +32,7 @@ export function useNowPlaying(stationId = ""): UseNowPlayingResult {
 
   useEffect(() => {
     mountedRef.current = true;
-    fetchNowPlaying();
+    setTimeout(() => fetchNowPlaying(), 0);
     intervalRef.current = setInterval(fetchNowPlaying, 5000);
     return () => {
       mountedRef.current = false;

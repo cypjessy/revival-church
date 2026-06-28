@@ -1,6 +1,7 @@
 "use client";
 
 import { Component, type ReactNode, type ErrorInfo } from "react";
+import { reportError } from "@/lib/errorReporter";
 
 interface Props {
   children: ReactNode;
@@ -27,7 +28,7 @@ export class RootErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error("[RootErrorBoundary] Caught error:", error, errorInfo);
+    reportError(error, { componentStack: errorInfo.componentStack ?? "" });
   }
 
   handleRetry = () => {

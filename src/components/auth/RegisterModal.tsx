@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import { auth, db } from "@/lib/firebase";
 import { useAppStore } from "@/lib/useAppStore";
 
-const CHURCH_ID = process.env.NEXT_PUBLIC_CHURCH_ID || "turningpoint_church_nakuru";
+const CHURCH_ID = process.env.NEXT_PUBLIC_CHURCH_ID || "kingdom_seekers_church_nakuru";
 
 export default function RegisterModal() {
   const router = useRouter();
@@ -77,10 +77,11 @@ export default function RegisterModal() {
       }
 
       closeModal();
-      showToast("Account Created!", `Welcome to Turningpoint Church Nakuru, ${name}! Check your email to verify your account.`, "success", 4000);
+      showToast("Account Created!", `Welcome to Kingdom Seekers Church Nakuru, ${name}! Check your email to verify your account.`, "success", 4000);
       setTimeout(() => router.push("/dashboard"), 800);
-    } catch (err: any) {
-      const code = err.code;
+    } catch (err: unknown) {
+      const e = err as { code?: string; message?: string };
+      const code = e.code;
       if (code === "auth/email-already-in-use") {
         setError("This email is already registered. Try signing in.");
       } else if (code === "auth/weak-password") {
@@ -88,7 +89,7 @@ export default function RegisterModal() {
       } else if (code === "auth/invalid-email") {
         setError("Invalid email address");
       } else {
-        setError(err.message || "Registration failed");
+        setError(e.message || "Registration failed");
       }
     } finally {
       setIsLoading(false);

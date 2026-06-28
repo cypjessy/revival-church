@@ -134,7 +134,7 @@ export default function AdminPage() {
     } catch {}
   }, []);
 
-  useEffect(() => { fetchYtStats(); }, [fetchYtStats]);
+  useEffect(() => { setTimeout(() => fetchYtStats(), 0); }, [fetchYtStats]);
 
   // Sync handler — calls YouTube API and re-fetches from Firestore
   const handleYtSync = useCallback(async () => {
@@ -178,8 +178,8 @@ export default function AdminPage() {
   }, [fetchYtStats]);
 
   /* Radio real-time state (polled from AzuraCast) */
-  const [radioNP, setRadioNP] = useState<any>(null);
-  const [radioHistory, setRadioHistory] = useState<any[]>([]);
+  const [radioNP, setRadioNP] = useState<import("@/lib/azuracast").NowPlayingData | null>(null);
+  const [radioHistory, setRadioHistory] = useState<import("@/lib/azuracast").SongHistoryItem[]>([]);
   const [radioSongsPlayedToday, setRadioSongsPlayedToday] = useState(0);
   const [radioBackendRunning, setRadioBackendRunning] = useState(false);
   const [radioPeakListeners, setRadioPeakListeners] = useState(0);
@@ -291,13 +291,8 @@ export default function AdminPage() {
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const audio = useAudio();
-  const [isAdminPlaying, setIsAdminPlaying] = useState(false);
   const adminStreamUrl = radioNP?.station?.listenUrl || "";
-
-  useEffect(() => {
-    const nowPlaying = audio.isPlaying && audio.currentStreamUrl === adminStreamUrl;
-    setIsAdminPlaying(nowPlaying);
-  }, [audio.isPlaying, audio.currentStationId, radioNP]);
+  const isAdminPlaying = audio.isPlaying && audio.currentStreamUrl === adminStreamUrl;
 
   const toggleAdminPlay = useCallback(() => {
     if (adminStreamUrl) {
@@ -442,21 +437,25 @@ export default function AdminPage() {
 
   // Compute uptime from earliest song in history
   useEffect(() => {
-    if (radioHistory.length > 0) {
-      const firstPlayed = radioHistory[radioHistory.length - 1]?.playedAt;
-      if (firstPlayed) {
-        const diffMs = Date.now() - new Date(firstPlayed).getTime();
-        const hrs = Math.floor(diffMs / 3600000);
-        const mins = Math.floor((diffMs % 3600000) / 60000);
-        setStationUptime(hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`);
+    const update = () => {
+      if (radioHistory.length > 0) {
+        const firstPlayed = radioHistory[radioHistory.length - 1]?.playedAt;
+        if (firstPlayed) {
+          const diffMs = Date.now() - new Date(firstPlayed).getTime();
+          const hrs = Math.floor(diffMs / 3600000);
+          const mins = Math.floor((diffMs % 3600000) / 60000);
+          setStationUptime(hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`);
+        }
       }
-    }
+    };
+    const timer = setTimeout(update, 0);
+    const interval = setInterval(update, 60000);
+    return () => { clearTimeout(timer); clearInterval(interval); };
   }, [radioHistory]);
 
   // Call schedule + content fetch on mount
   useEffect(() => {
-    fetchSchedule();
-    fetchContentAndStorage();
+    setTimeout(() => { fetchSchedule(); fetchContentAndStorage(); }, 0);
   }, [fetchSchedule, fetchContentAndStorage]);
 
   // Poll AzuraCast every 10 seconds
@@ -565,6 +564,7 @@ export default function AdminPage() {
         // Estimate songs played today from history (songs in last 24h)
         const today = new Date();
         today.setHours(0, 0, 0, 0);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const todaySongs = history.filter((h: any) => {
           if (!h.playedAt) return false;
           const played = new Date(h.playedAt);
@@ -604,11 +604,14 @@ export default function AdminPage() {
   /* Donut chart SVG */
   const usedFormatted = formatBytes(storageTotal.used).split(" ");
   const totalStorage = storageBreakdown.reduce((s, i) => s + i.value, 0) || 1;
-  let cumulativeAngle = 0;
-  const donutSegments = storageBreakdown.map((item) => {
+  const cumulativeAngles = storageBreakdown.reduce<number[]>((acc, item) => {
+    const prev = acc.length > 0 ? acc[acc.length - 1] : 0;
+    acc.push(prev + (item.value / totalStorage) * 360);
+    return acc;
+  }, []);
+  const donutSegments = storageBreakdown.map((item, i) => {
     const angle = (item.value / totalStorage) * 360;
-    const startAngle = cumulativeAngle;
-    cumulativeAngle += angle;
+    const startAngle = cumulativeAngles[i] - angle;
     const startRad = ((startAngle - 90) * Math.PI) / 180;
     const endRad = ((startAngle + angle - 90) * Math.PI) / 180;
     const x1 = 50 + 40 * Math.cos(startRad);
@@ -1678,6 +1681,9 @@ export default function AdminPage() {
                 <button className="dash-dropdown-item">
                   <i className="fas fa-sliders"></i> Station Settings
                 </button>
+                <button className="dash-dropdown-item" onClick={() => { setShowProfileDropdown(false); router.push("/admin/accounts"); }}>
+                  <i className="fas fa-user-shield"></i> Accounts
+                </button>
                 <hr style={{ border: "none", borderTop: "1px solid var(--border)", margin: "4px 0" }} />
                 <button className="dash-dropdown-item danger" onClick={handleLogout}>
                   <i className="fas fa-right-from-bracket"></i> Logout
@@ -1687,97 +1693,98 @@ export default function AdminPage() {
           </div>
         </header>
 
-        {/* PREMIUM RADIO HERO CARD */}
-        <div className="rh-hero" style={{ margin: "0 16px 12px" }}>
-          {/* Animated background glow layers */}
-          <div className="rh-glow-1"></div>
-          <div className="rh-glow-2"></div>
-
-          {/* Top row: station name + badges */}
-          <div className="rh-top">
-            <div className="rh-station">
-              <i className="fas fa-tower-broadcast"></i>
-              <span>{radioNP?.station?.name || "Radio Station"}</span>
-            </div>
-            <div className="rh-badges">
-              <div className={`rh-live-badge ${isAdminPlaying || radioBackendRunning ? "live" : "off"}`}>
-                <span className="rh-live-dot"></span>
-                {isAdminPlaying || radioBackendRunning ? "Live" : "Off Air"}
-              </div>
-              <div className="rh-listener-badge">
-                <i className="fas fa-headphones"></i>
-                {liveListeners}
-              </div>
-            </div>
-          </div>
-
-          {/* Main content: album art + info */}
-          <div className="rh-main">
-            <div className="rh-art-wrap">
-              <div className="rh-art-ring"></div>
-              <div className={`rh-art ${isAdminPlaying ? "spinning" : ""}`}>
-                {nowPlaying.albumArt ? (
-                  <img src={nowPlaying.albumArt} alt="" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                ) : (
-                  <div className="rh-art-fallback">
-                    <i className="fas fa-radio"></i>
-                  </div>
-                )}
-              </div>
-              {/* Equalizer overlay when playing */}
-              {isAdminPlaying && (
-                <div className="rh-eq">
-                  <span></span><span></span><span></span><span></span>
-                </div>
-              )}
-              {/* Spinning vinyl lines when playing */}
-              {isAdminPlaying && <div className="rh-vinyl-lines"></div>}
-            </div>
-
-            <div className="rh-info">
-              <div className="rh-track-name">{nowPlaying.title || "Station Offline"}</div>
-              <div className="rh-track-artist">{nowPlaying.artist || "Not currently playing"}</div>
-              <div className="rh-source">
-                <i className="fas fa-radio"></i> {radioNP?.station?.name || "Radio"}
-              </div>
-            </div>
-          </div>
-
-          {/* Progress bar */}
-          <div className="rh-progress-wrap">
-            <div className="rh-progress-bar">
-              <div className="rh-progress-fill" style={{ width: `${isAdminPlaying && nowPlaying.duration > 0 ? Math.min(100, (nowPlaying.elapsed / nowPlaying.duration) * 100) : 0}%` }}>
-                <div className="rh-progress-glow"></div>
-              </div>
-            </div>
-            <div className="rh-progress-time">
-              <span>{nowPlaying.duration > 0 ? formatTime(nowPlaying.elapsed) : "0:00"}</span>
-              <span>{nowPlaying.duration > 0 ? formatTime(nowPlaying.duration) : "0:00"}</span>
-            </div>
-          </div>
-
-          {/* Controls row */}
-          <div className="rh-actions">
-            <button className="rh-shuffle-btn" title="Shuffle">
-              <i className="fas fa-shuffle"></i>
-            </button>
-            <button className={`rh-play-btn ${isAdminPlaying ? "playing" : ""}`} onClick={toggleAdminPlay}>
-              <i className={`fas fa-${isAdminPlaying ? "pause" : "play"}`}></i>
-              <div className="rh-play-ring"></div>
-            </button>
-            <button className="rh-expand-btn" onClick={() => router.push("/admin/radio")} title="Open Radio">
-              <i className="fas fa-expand"></i>
-            </button>
-          </div>
-
-          {/* AzuraCast embed below */}
-          <div className="rh-embed">
-            <iframe src="https://azuracast.histoview.co.ke/public/turningpoint_church/embed?theme=dark" style={{ width: "100%", height: 120, border: "none", display: "block", borderRadius: 8 }}></iframe>
-          </div>
-        </div>
-
         {/* CONTENT SCROLL */}
         <div className="content-scroll">
+
+          {/* PREMIUM RADIO HERO CARD */}
+          <div className="rh-hero" style={{ margin: "0 16px 12px" }}>
+            {/* Animated background glow layers */}
+            <div className="rh-glow-1"></div>
+            <div className="rh-glow-2"></div>
+
+            {/* Top row: station name + badges */}
+            <div className="rh-top">
+              <div className="rh-station">
+                <i className="fas fa-tower-broadcast"></i>
+                <span>{radioNP?.station?.name || "Radio Station"}</span>
+              </div>
+              <div className="rh-badges">
+                <div className={`rh-live-badge ${isAdminPlaying || radioBackendRunning ? "live" : "off"}`}>
+                  <span className="rh-live-dot"></span>
+                  {isAdminPlaying || radioBackendRunning ? "Live" : "Off Air"}
+                </div>
+                <div className="rh-listener-badge">
+                  <i className="fas fa-headphones"></i>
+                  {liveListeners}
+                </div>
+              </div>
+            </div>
+
+            {/* Main content: album art + info */}
+            <div className="rh-main">
+              <div className="rh-art-wrap">
+                <div className="rh-art-ring"></div>
+                <div className={`rh-art ${isAdminPlaying ? "spinning" : ""}`}>
+                  {nowPlaying.albumArt ? (
+                    <img src={nowPlaying.albumArt} alt="" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                  ) : (
+                    <div className="rh-art-fallback">
+                      <i className="fas fa-radio"></i>
+                    </div>
+                  )}
+                </div>
+                {/* Equalizer overlay when playing */}
+                {isAdminPlaying && (
+                  <div className="rh-eq">
+                    <span></span><span></span><span></span><span></span>
+                  </div>
+                )}
+                {/* Spinning vinyl lines when playing */}
+                {isAdminPlaying && <div className="rh-vinyl-lines"></div>}
+              </div>
+
+              <div className="rh-info">
+                <div className="rh-track-name">{nowPlaying.title || "Station Offline"}</div>
+                <div className="rh-track-artist">{nowPlaying.artist || "Not currently playing"}</div>
+                <div className="rh-source">
+                  <i className="fas fa-radio"></i> {radioNP?.station?.name || "Radio"}
+                </div>
+              </div>
+            </div>
+
+            {/* Progress bar */}
+            <div className="rh-progress-wrap">
+              <div className="rh-progress-bar">
+                <div className="rh-progress-fill" style={{ width: `${isAdminPlaying && nowPlaying.duration > 0 ? Math.min(100, (nowPlaying.elapsed / nowPlaying.duration) * 100) : 0}%` }}>
+                  <div className="rh-progress-glow"></div>
+                </div>
+              </div>
+              <div className="rh-progress-time">
+                <span>{nowPlaying.duration > 0 ? formatTime(nowPlaying.elapsed) : "0:00"}</span>
+                <span>{nowPlaying.duration > 0 ? formatTime(nowPlaying.duration) : "0:00"}</span>
+              </div>
+            </div>
+
+            {/* Controls row */}
+            <div className="rh-actions">
+              <button className="rh-shuffle-btn" title="Shuffle">
+                <i className="fas fa-shuffle"></i>
+              </button>
+              <button className={`rh-play-btn ${isAdminPlaying ? "playing" : ""}`} onClick={toggleAdminPlay}>
+                <i className={`fas fa-${isAdminPlaying ? "pause" : "play"}`}></i>
+                <div className="rh-play-ring"></div>
+              </button>
+              <button className="rh-expand-btn" onClick={() => router.push("/admin/radio")} title="Open Radio">
+                <i className="fas fa-expand"></i>
+              </button>
+            </div>
+
+            {/* AzuraCast embed below */}
+            <div className="rh-embed">
+              <iframe src="https://azuracast.histoview.co.ke/public/turningpoint_church/embed?theme=dark" style={{ width: "100%", height: 120, border: "none", display: "block", borderRadius: 8 }}></iframe>
+            </div>
+          </div>
+
           {/* STAT CARDS */}
           <div className="stats-grid">
             {statCards.map((card) => (
@@ -2027,7 +2034,7 @@ export default function AdminPage() {
               <div className="widget-card">
                 <div className="widget-label">
                   <i className="fas fa-calendar-days" style={{ marginRight: 6, color: "var(--primary)" }}></i>
-                  Today's Schedule
+                  Today&apos;s Schedule
                 </div>
                 <div className="schedule-timeline">
                   {scheduleSlots.map((slot, i) => (

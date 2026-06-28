@@ -27,6 +27,7 @@ dependencies {
     implementation project(':capacitor-splash-screen')
     implementation project(':capacitor-status-bar')
     implementation project(':capgo-capacitor-youtube-player')
+    implementation project(':capacitor-music-controls-plugin')
     implementation project(':capacitor-native-biometric')
 
 }

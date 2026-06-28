@@ -11,6 +11,7 @@ export async function scheduleLocalNotification(
 
     const id = Date.now();
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let scheduleData: any;
     if ("at" in schedule) {
       const notifyTime = new Date(schedule.at);

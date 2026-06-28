@@ -122,7 +122,7 @@ export default function AdminVideoPage() {
     }
   }, [loadVideosPage]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { setTimeout(() => loadData(), 0); }, [loadData]);
 
   const loadMore = useCallback(async () => {
     if (!lastDoc) return;
@@ -423,7 +423,7 @@ export default function AdminVideoPage() {
         <div className="connect-screen">
           <div className="connect-icon"><i className="fab fa-youtube"></i></div>
           <h1 className="connect-title">Connect YouTube</h1>
-          <p className="connect-desc">Sync your church's YouTube channel to manage and organize all your videos in one place.</p>
+          <p className="connect-desc">Sync your church&apos;s YouTube channel to manage and organize all your videos in one place.</p>
           <button className="connect-btn" onClick={handleConnect} disabled={syncing}>
             {syncing ? <i className="fas fa-spinner fa-spin"></i> : <i className="fab fa-youtube"></i>}
             {syncing ? "Connecting..." : "Connect with YouTube"}
@@ -1131,7 +1131,7 @@ export default function AdminVideoPage() {
           <div className="modal-header"><h2>Delete Video</h2></div>
           <div className="modal-body">
             <p style={{ textAlign: "center", color: "var(--text-secondary)", fontSize: 15, lineHeight: 1.6 }}>
-              Are you sure you want to delete <strong style={{ color: "var(--text-primary)" }}>"{editForm.title}"</strong>? This action cannot be undone.
+              Are you sure you want to delete <strong style={{ color: "var(--text-primary)" }}>&quot;{editForm.title}&quot;</strong>? This action cannot be undone.
             </p>
           </div>
           <div className="modal-footer" style={{ flexDirection: "column" }}>

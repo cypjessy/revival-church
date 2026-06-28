@@ -1,0 +1,3089 @@
+"use client";
+
+import React, { useEffect, useRef, useState } from "react";
+import AdminBottomNav from "@/components/admin/AdminBottomNav";
+import ToastBridge from "@/components/dashboard/ToastBridge";
+import {
+  getNowPlaying, getStationStatus, toggleAutoDJ,
+  getPlaylists, createPlaylist as apiCreatePlaylist,
+  togglePlaylistEnabled as apiTogglePlaylist,
+  deletePlaylist as apiDeletePlaylist,
+  updatePlaylist as apiUpdatePlaylist,
+  addSongsToPlaylist as apiAddSongs,
+  removeSongFromPlaylist as apiRemoveSong,
+  getStationFiles,
+  deleteStationFiles, deleteFile, updateFileMetadata, uploadFile,
+  getSongHistory,
+  getQueue as apiGetQueue,
+  getApiBase,
+  getApiKey,
+  getStationId,
+  getPublicPlayerUrl,
+  getStreamers,
+  createStreamer,
+  updateStreamer,
+  deleteStreamer,
+} from "@/lib/azuracast";
+import { hapticSuccess } from "@/lib/haptics";
+import type { Playlist, StationFile, QueueItem } from "@/lib/azuracast";
+import dynamic from "next/dynamic";
+
+const RadioOverviewTab = dynamic(() => import("@/components/admin/radio/tabs/RadioOverviewTab").then(m => m.RadioOverviewTab), { ssr: false });
+const RadioMediaTab = dynamic(() => import("@/components/admin/radio/tabs/RadioMediaTab").then(m => m.RadioMediaTab), { ssr: false });
+const RadioPlaylistsTab = dynamic(() => import("@/components/admin/radio/tabs/RadioPlaylistsTab").then(m => m.RadioPlaylistsTab), { ssr: false });
+const RadioGoLiveTab = dynamic(() => import("@/components/admin/radio/tabs/RadioGoLiveTab").then(m => m.RadioGoLiveTab), { ssr: false });
+
+// ========== REFERENCE DATA ==========
+const sidebarTabs = [
+  { id: "overview", icon: "fa-house", label: "Overview" },
+  { id: "media", icon: "fa-music", label: "Media" },
+  { id: "playlists", icon: "fa-list", label: "Playlists" },
+  { id: "golive", icon: "fa-microphone", label: "Go Live" },
+];
+
+// ========== REFERENCE DATA ==========
+const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const HOURS = Array.from({ length: 24 }, (_, i) => i);
+
+export default function AdminRadioPage() {
+  const [activeTab, setActiveTab] = useState("overview");
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isLive, setIsLive] = useState(false);
+  const [autoDJ, setAutoDJ] = useState(false);
+  const [listeners, setListeners] = useState(0);
+  const [overviewNP, setOverviewNP] = useState<import("@/lib/azuracast").NowPlayingData | null>(null);
+  const [overviewHistory, setOverviewHistory] = useState<import("@/lib/azuracast").SongHistoryItem[]>([]);
+  const [overviewLoading, setOverviewLoading] = useState(false);
+
+  // Media Library state
+  const [mediaSearch, setMediaSearch] = useState("");
+  const [mediaFilterPlaylist, setMediaFilterPlaylist] = useState("");
+  const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(new Set());
+  const [uploadProgress, setUploadProgress] = useState<{ id: string; name: string; progress: number }[]>([]);
+  const [editingFile, setEditingFile] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editArtist, setEditArtist] = useState("");
+  const [editAlbum, setEditAlbum] = useState("");
+  const [showMediaActions, setShowMediaActions] = useState<string | null>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [playlistPickerOpen, setPlaylistPickerOpen] = useState(false);
+
+  const [backendRunning, setBackendRunning] = useState(false);
+
+  // Playlists state
+  const [playlists, setPlaylists] = useState<Playlist[]>([]);
+  const [stationFiles, setStationFiles] = useState<StationFile[]>([]);
+  const [loadingPlaylists, setLoadingPlaylists] = useState(true);
+  const [expandedPlaylist, setExpandedPlaylist] = useState<string | null>(null);
+  const [showCreatePlaylist, setShowCreatePlaylist] = useState(false);
+  const [plForm, setPlForm] = useState({ name: "", type: "standard", order: "shuffle", weight: 10 });
+  const [plSchedule, setPlSchedule] = useState({ days: [] as string[], startTime: "09:00", endTime: "17:00" });
+  const [showSongPicker, setShowSongPicker] = useState(false);
+  const [songPickerPlaylistId, setSongPickerPlaylistId] = useState<string | null>(null);
+  const [pickerSearch, setPickerSearch] = useState("");
+  const [playlistFilter, setPlaylistFilter] = useState("");
+  const [plFilterTab, setPlFilterTab] = useState("all");
+  const [selectedPlId, setSelectedPlId] = useState<string | null>(null);
+  const [showEditPlModal, setShowEditPlModal] = useState(false);
+  const [editingPlId, setEditingPlId] = useState<string | null>(null);
+  const [plConfirmDelete, setPlConfirmDelete] = useState<string | null>(null);
+  const [plMenuOpen, setPlMenuOpen] = useState<string | null>(null);
+  const [addSongsSearch, setAddSongsSearch] = useState("");
+  const [addSongsSelected, setAddSongsSelected] = useState<Set<string>>(new Set());
+  const [plCreateType, setPlCreateType] = useState<"standard" | "scheduled" | "on_demand">("standard");
+  const [plCreateOrder, setPlCreateOrder] = useState<"shuffle" | "sequential">("shuffle");
+  const [addSongsPlId, setAddSongsPlId] = useState<string | null>(null);
+  const [showScheduleView, setShowScheduleView] = useState(false);
+
+  // Play Control state
+  const [pcMode, setPcMode] = useState<"schedule" | "playlist" | "single">("schedule");
+  const [pcQueue, setPcQueue] = useState<QueueItem[]>([]);
+  const [pcPlaylists, setPcPlaylists] = useState<Playlist[]>([]);
+  const [pcFiles, setPcFiles] = useState<StationFile[]>([]);
+  const [pcActivePlaylist, setPcActivePlaylist] = useState<string | null>(null);
+  const [pcActiveTrack, setPcActiveTrack] = useState<string>("");
+  const [pcAutoDJ, setPcAutoDJ] = useState(false);
+  const [pcLoading, setPcLoading] = useState(false);
+  const [pcActionLoading, setPcActionLoading] = useState<string | null>(null);
+
+  // Shared per-tab loading states
+  const [plActionLoading, setPlActionLoading] = useState(false);
+  const [mediaActionLoading, setMediaActionLoading] = useState(false);
+
+  // Go Live state
+  const [streamers, setStreamers] = useState<import("@/lib/azuracast").Streamer[]>([]);
+  const [glLoading, setGlLoading] = useState(false);
+  const [glActionLoading, setGlActionLoading] = useState<string | null>(null);
+  const [showStreamerForm, setShowStreamerForm] = useState(false);
+  const [editingStreamerId, setEditingStreamerId] = useState<string | null>(null);
+  const [streamerForm, setStreamerForm] = useState({ displayName: "", username: "", password: "" });
+  const [glBroadcasts, setGlBroadcasts] = useState<{ streamer: string; date: string; duration: string; startTime: string }[]>([]);
+  const [showPassword, setShowPassword] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+  const [selectedStreamerId, setSelectedStreamerId] = useState<string | null>(null);
+  const [streamerPasswords, setStreamerPasswords] = useState<Record<string, string>>({});
+  const MASTER_PW = "7ZajL44g";
+
+  // Poll Go Live data when tab is active
+  useEffect(() => {
+    if (activeTab !== "golive") return;
+    const poll = async () => {
+      await Promise.resolve(); // defer to avoid sync setState
+      setGlLoading(true);
+      const [strResult, npResult] = await Promise.all([
+        getStreamers().catch(() => [] as import("@/lib/azuracast").Streamer[]),
+        getNowPlaying(getStationId()).catch(() => null),
+      ]);
+      setStreamers(strResult);
+      if (npResult) {
+        setOverviewNP(npResult);
+        setListeners(npResult.listeners.current);
+        setIsLive(npResult.live.isLive);
+      }
+      // Set initial selected streamer
+      if (strResult.length > 0 && !selectedStreamerId) {
+        setSelectedStreamerId(strResult[0].id);
+      }
+      // Fetch broadcasts for all streamers
+      const allBroadcasts: { streamer: string; date: string; duration: string; startTime: string }[] = [];
+      for (const s of strResult) {
+        try {
+          const res = await fetch(
+            `https://azuracast.histoview.co.ke/api/station/2/streamer/${s.id}/broadcasts`,
+            { headers: { Authorization: `Bearer ${getApiKey()}` } }
+          );
+          if (res.ok) {
+            const data = await res.json();
+            for (const b of (Array.isArray(data) ? data : [])) {
+              const start = new Date(b.timestampStart);
+              const end = new Date(b.timestampEnd);
+              const diffSec = Math.round((end.getTime() - start.getTime()) / 1000);
+              const mins = Math.floor(diffSec / 60);
+              const secs = diffSec % 60;
+              allBroadcasts.push({
+                streamer: s.displayName,
+                date: start.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+                startTime: start.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
+                duration: diffSec < 60 ? `${diffSec}s` : `${mins}m ${secs}s`,
+              });
+            }
+          }
+        } catch {}
+      }
+      allBroadcasts.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      setGlBroadcasts(allBroadcasts);
+      setGlLoading(false);
+    };
+    poll();
+    const interval = setInterval(poll, 15000);
+    return () => clearInterval(interval);
+  }, [activeTab]);
+
+  // Fetch playlists and files when Playlists or Media tab is active
+  useEffect(() => {
+    if (activeTab !== "playlists" && activeTab !== "media") return;
+    queueMicrotask(() => setLoadingPlaylists(activeTab === "playlists"));
+    Promise.all([
+      getPlaylists().then(setPlaylists),
+      getStationFiles().then(setStationFiles),
+    ]).catch(() => {}).finally(() => {
+      if (activeTab === "playlists") setLoadingPlaylists(false);
+    });
+  }, [activeTab]);
+
+  // Poll overview data when tab is active
+  useEffect(() => {
+    if (activeTab !== "overview") return;
+    const poll = async () => {
+      await Promise.resolve();
+      setOverviewLoading(true);
+      const [np, status, history, queue, playlists, files] = await Promise.all([
+        getNowPlaying(getStationId()).catch(() => null),
+        getStationStatus(getStationId()).catch(() => ({ backendRunning: false })),
+        getSongHistory(5).catch(() => []),
+        apiGetQueue().catch(() => []),
+        getPlaylists().catch(() => []),
+        getStationFiles().catch(() => []),
+      ]);
+      if (np) {
+        setOverviewNP(np);
+        setListeners(np.listeners.current);
+        setIsLive(np.live.isLive || (status?.backendRunning ?? false));
+      }
+      if (status) {
+        setAutoDJ(status.backendRunning);
+        setPcAutoDJ(status.backendRunning);
+        setBackendRunning(status.backendRunning);
+      }
+      if (history) setOverviewHistory(history);
+      if (queue) setPcQueue(queue);
+      if (playlists) {
+        setPcPlaylists(playlists);
+        const active = playlists.find((p: Playlist) => p.enabled && !p.schedule && playlists.filter((o: Playlist) => o.enabled && !o.schedule).length === 1);
+        setPcActivePlaylist(active?.id || null);
+        if (!active) setPcActiveTrack("");
+      }
+      if (files) setPcFiles(files);
+      setOverviewLoading(false);
+    };
+    poll();
+    const interval = setInterval(poll, 10000);
+    return () => clearInterval(interval);
+  }, [activeTab]);
+
+  const renderOverview = () => (
+    <RadioOverviewTab
+      overviewNP={overviewNP}
+      overviewHistory={overviewHistory}
+      overviewLoading={overviewLoading}
+      autoDJ={autoDJ}
+      isLive={isLive}
+      isPlaying={isPlaying}
+      listeners={listeners}
+      backendRunning={backendRunning}
+      setIsPlaying={setIsPlaying}
+      setAutoDJ={setAutoDJ}
+      pcMode={pcMode}
+      pcQueue={pcQueue}
+      pcPlaylists={pcPlaylists}
+      pcFiles={pcFiles}
+      pcActivePlaylist={pcActivePlaylist}
+      pcActiveTrack={pcActiveTrack}
+      pcAutoDJ={pcAutoDJ}
+      pcActionLoading={pcActionLoading}
+      setPcMode={setPcMode}
+      setPcPlaylists={setPcPlaylists}
+      setPcActivePlaylist={setPcActivePlaylist}
+      setPcActiveTrack={setPcActiveTrack}
+      setPcActionLoading={setPcActionLoading}
+      setActiveTab={setActiveTab}
+    />
+  );
+
+  const renderMedia = () => (
+    <RadioMediaTab
+      stationFiles={stationFiles}
+      setStationFiles={setStationFiles}
+      mediaSearch={mediaSearch}
+      setMediaSearch={setMediaSearch}
+      mediaFilterPlaylist={mediaFilterPlaylist}
+      setMediaFilterPlaylist={setMediaFilterPlaylist}
+      selectedFileIds={selectedFileIds}
+      setSelectedFileIds={setSelectedFileIds}
+      uploadProgress={uploadProgress}
+      setUploadProgress={setUploadProgress}
+      editingFile={editingFile}
+      setEditingFile={setEditingFile}
+      editTitle={editTitle}
+      setEditTitle={setEditTitle}
+      editArtist={editArtist}
+      setEditArtist={setEditArtist}
+      editAlbum={editAlbum}
+      setEditAlbum={setEditAlbum}
+      showMediaActions={showMediaActions}
+      setShowMediaActions={setShowMediaActions}
+      menuPos={menuPos}
+      setMenuPos={setMenuPos}
+      dragging={dragging}
+      setDragging={setDragging}
+      playlistPickerOpen={playlistPickerOpen}
+      setPlaylistPickerOpen={setPlaylistPickerOpen}
+      playlists={playlists}
+      mediaActionLoading={mediaActionLoading}
+      setMediaActionLoading={setMediaActionLoading}
+    />
+  );
+  const renderPlaylists = () => (
+    <RadioPlaylistsTab
+      playlists={playlists}
+      setPlaylists={setPlaylists}
+      stationFiles={stationFiles}
+      setStationFiles={setStationFiles}
+      loadingPlaylists={loadingPlaylists}
+      setLoadingPlaylists={setLoadingPlaylists}
+      selectedPlId={selectedPlId}
+      setSelectedPlId={setSelectedPlId}
+      showEditPlModal={showEditPlModal}
+      setShowEditPlModal={setShowEditPlModal}
+      editingPlId={editingPlId}
+      setEditingPlId={setEditingPlId}
+      plConfirmDelete={plConfirmDelete}
+      setPlConfirmDelete={setPlConfirmDelete}
+      plMenuOpen={plMenuOpen}
+      setPlMenuOpen={setPlMenuOpen}
+      showCreatePlaylist={showCreatePlaylist}
+      setShowCreatePlaylist={setShowCreatePlaylist}
+      plForm={plForm}
+      setPlForm={setPlForm}
+      plSchedule={plSchedule}
+      setPlSchedule={setPlSchedule}
+      showSongPicker={showSongPicker}
+      setShowSongPicker={setShowSongPicker}
+      addSongsSearch={addSongsSearch}
+      setAddSongsSearch={setAddSongsSearch}
+      addSongsSelected={addSongsSelected}
+      setAddSongsSelected={setAddSongsSelected}
+      addSongsPlId={addSongsPlId}
+      setAddSongsPlId={setAddSongsPlId}
+      plCreateType={plCreateType}
+      setPlCreateType={setPlCreateType}
+      plCreateOrder={plCreateOrder}
+      setPlCreateOrder={setPlCreateOrder}
+      plFilterTab={plFilterTab}
+      setPlFilterTab={setPlFilterTab}
+      playlistFilter={playlistFilter}
+      setPlaylistFilter={setPlaylistFilter}
+      showScheduleView={showScheduleView}
+      setShowScheduleView={setShowScheduleView}
+      plActionLoading={plActionLoading}
+      setPlActionLoading={setPlActionLoading}
+      pcActivePlaylist={pcActivePlaylist}
+    />
+  );
+
+  const renderGoLive = () => (
+    <RadioGoLiveTab
+      isLive={isLive}
+      listeners={listeners}
+      streamers={streamers}
+      setStreamers={setStreamers}
+      glLoading={glLoading}
+      glActionLoading={glActionLoading}
+      setGlActionLoading={setGlActionLoading}
+      showStreamerForm={showStreamerForm}
+      setShowStreamerForm={setShowStreamerForm}
+      editingStreamerId={editingStreamerId}
+      setEditingStreamerId={setEditingStreamerId}
+      streamerForm={streamerForm}
+      setStreamerForm={setStreamerForm}
+      glBroadcasts={glBroadcasts}
+      showPassword={showPassword}
+      setShowPassword={setShowPassword}
+      copyFeedback={copyFeedback}
+      setCopyFeedback={setCopyFeedback}
+      selectedStreamerId={selectedStreamerId}
+      setSelectedStreamerId={setSelectedStreamerId}
+      streamerPasswords={streamerPasswords}
+      setStreamerPasswords={setStreamerPasswords}
+      MASTER_PW={MASTER_PW}
+    />
+  );
+
+  const renderContent = () => {
+    switch (activeTab) {
+      case "overview": return renderOverview();
+      case "media": return renderMedia();
+      case "playlists": return renderPlaylists();
+      case "golive": return renderGoLive();
+      default: return renderOverview();
+    }
+  };
+      if (allSelected) {
+        setSelectedFileIds(new Set());
+      } else {
+        setSelectedFileIds(new Set(filteredFiles.map((f) => f.id)));
+      }
+    };
+
+    const startEdit = (file: StationFile) => {
+      setEditingFile(file.id);
+      setEditTitle(file.title);
+      setEditArtist(file.artist);
+      setEditAlbum(file.album);
+    };
+
+    const saveEdit = async () => {
+      if (!editingFile || mediaActionLoading) return;
+      setMediaActionLoading(true);
+      const file = stationFiles.find((f) => f.id === editingFile);
+      const fileId = file?.unique_id || editingFile;
+      const ok = await updateFileMetadata(fileId, {
+        title: editTitle,
+        artist: editArtist,
+        album: editAlbum,
+      });
+      if (ok) {
+        setStationFiles((prev) =>
+          prev.map((f) =>
+            f.id === editingFile
+              ? { ...f, title: editTitle, artist: editArtist, album: editAlbum }
+              : f
+          )
+        );
+      }
+      window.dispatchEvent(
+        new CustomEvent("show-toast", {
+          detail: { title: ok ? "Metadata Saved" : "Error", message: ok ? `"${editTitle}" updated successfully` : "Failed to save metadata", type: ok ? "success" : "error", duration: 2500 },
+        })
+      );
+      if (ok) await hapticSuccess();
+      setEditingFile(null);
+      setMediaActionLoading(false);
+    };
+
+    const cancelEdit = () => {
+      setEditingFile(null);
+    };
+
+    const handleDeleteFile = async () => {
+      if (!showMediaActions || mediaActionLoading) return;
+      setMediaActionLoading(true);
+      const file = stationFiles.find((f) => f.id === showMediaActions);
+      if (file) {
+        const fileId = file.unique_id || file.id;
+        const ok = await deleteFile(fileId);
+        if (ok) {
+          setStationFiles((prev) => prev.filter((f) => f.id !== file.id));
+        }
+        window.dispatchEvent(
+          new CustomEvent("show-toast", {
+            detail: { title: ok ? "File Deleted" : "Error", message: ok ? "Track removed from media library" : "Failed to delete file", type: ok ? "success" : "error", duration: 2500 },
+          })
+        );
+        if (ok) await hapticSuccess();
+      }
+      setShowMediaActions(null);
+      setMediaActionLoading(false);
+    };
+
+    const handleBulkDelete = async () => {
+      if (selectedFileIds.size === 0 || mediaActionLoading) return;
+      setMediaActionLoading(true);
+      const filesToDelete = stationFiles.filter((f) => selectedFileIds.has(f.id));
+      const filePaths = filesToDelete.map((f) => f.path).filter(Boolean);
+      let ok = true;
+      if (filePaths.length > 0) {
+        ok = await deleteStationFiles(filePaths);
+      }
+      if (ok) {
+        setStationFiles((prev) => prev.filter((f) => !selectedFileIds.has(f.id)));
+      }
+      window.dispatchEvent(
+        new CustomEvent("show-toast", {
+          detail: { title: ok ? "Files Deleted" : "Error", message: ok ? `${selectedFileIds.size} tracks removed` : "Failed to delete files", type: ok ? "success" : "error", duration: 2500 },
+        })
+      );
+      if (ok) await hapticSuccess();
+      setSelectedFileIds(new Set());
+      setMediaActionLoading(false);
+    };
+
+    const handleBulkAddPlaylist = () => {
+      if (selectedFileIds.size === 0) return;
+      setPlaylistPickerOpen(true);
+    };
+
+    const addToPlaylist = async (playlistId: string) => {
+      if (mediaActionLoading) return;
+      setMediaActionLoading(true);
+      const pl = playlists.find((p) => p.id === playlistId);
+      const songIds = [...selectedFileIds].map((fid) => {
+        const file = stationFiles.find((f) => f.id === fid);
+        return file?.unique_id || fid;
+      }).filter(Boolean) as string[];
+      const ok = await apiAddSongs(playlistId, songIds);
+      if (ok) {
+        setStationFiles((prev) =>
+          prev.map((f) =>
+            selectedFileIds.has(f.id)
+              ? { ...f, playlists: f.playlists.includes(playlistId) ? f.playlists : [...f.playlists, playlistId] }
+              : f
+          )
+        );
+      }
+      window.dispatchEvent(
+        new CustomEvent("show-toast", {
+          detail: { title: ok ? "Added to Playlist" : "Error", message: ok ? `${selectedFileIds.size} tracks added to "${pl?.name || ""}"` : "Failed to add tracks to playlist", type: ok ? "success" : "error", duration: 2500 },
+        })
+      );
+      if (ok) await hapticSuccess();
+      setPlaylistPickerOpen(false);
+      setSelectedFileIds(new Set());
+      setMediaActionLoading(false);
+    };
+
+    const simulateUpload = async (files?: FileList) => {
+      if (files && files.length > 0) {
+        let successCount = 0;
+        let failCount = 0;
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          const id = "upload_" + Date.now() + "_" + i;
+          setUploadProgress((prev) => [...prev, { id, name: file.name, progress: 0 }]);
+          const interval = setInterval(() => {
+            setUploadProgress((prev) =>
+              prev.map((u) =>
+                u.id === id && u.progress < 90
+                  ? { ...u, progress: u.progress + Math.random() * 6 + 1 }
+                  : u
+              )
+            );
+          }, 350);
+          const uploaded = await uploadFile(file).catch(() => null);
+          clearInterval(interval);
+          if (uploaded) {
+            successCount++;
+            setUploadProgress((prev) =>
+              prev.map((u) => (u.id === id ? { ...u, progress: 100 } : u))
+            );
+            setStationFiles((prev) => [...prev, uploaded]);
+          } else {
+            failCount++;
+            setUploadProgress((prev) => prev.filter((u) => u.id !== id));
+          }
+        }
+        if (successCount > 0) {
+          window.dispatchEvent(
+            new CustomEvent("show-toast", {
+              detail: { title: "Upload Complete", message: `${successCount} file${successCount > 1 ? "s" : ""} uploaded${failCount > 0 ? `, ${failCount} failed` : ""}`, type: failCount > 0 ? "error" : "success", duration: 3000 },
+            })
+          );
+          await hapticSuccess();
+        } else {
+          window.dispatchEvent(
+            new CustomEvent("show-toast", {
+              detail: { title: "Upload Failed", message: "Could not upload files to AzuraCast", type: "error", duration: 4000 },
+            })
+          );
+        }
+        return;
+      }
+      // Fallback: simulate upload with progress (for drag-drop without real files)
+      const id = "upload_" + Date.now();
+      const name = "New_Sermon.mp3";
+      setUploadProgress((prev) => [...prev, { id, name, progress: 0 }]);
+      const interval = setInterval(() => {
+        setUploadProgress((prev) =>
+          prev.map((u) =>
+            u.id === id ? { ...u, progress: Math.min(100, u.progress + Math.random() * 15 + 3) } : u
+          )
+        );
+      }, 300);
+      setTimeout(async () => {
+        clearInterval(interval);
+        setUploadProgress((prev) => prev.filter((u) => u.id !== id));
+        window.dispatchEvent(
+          new CustomEvent("show-toast", {
+            detail: { title: "Upload Complete", message: `"${name}" added to media library`, type: "success", duration: 3000 },
+          })
+        );
+        await hapticSuccess();
+      }, 3000);
+    };
+
+    return (
+      <div className="media-content">
+        {/* Upload Zone */}
+        <div
+          className={`upload-zone ${dragging ? "dragging" : ""}`}
+          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(e) => { e.preventDefault(); setDragging(false); if (e.dataTransfer.files?.length) simulateUpload(e.dataTransfer.files); }}
+          onClick={() => document.getElementById("media-file-input")?.click()}
+        >
+          <i className={`fas ${dragging ? "fa-file-circle-plus" : "fa-cloud-arrow-up"}`}></i>
+          <div className="upload-zone-text">
+            <h4>{dragging ? "Drop files here" : "Tap to Upload or Drag & Drop"}</h4>
+            <p>MP3, AAC, OGG, FLAC — up to 50MB</p>
+          </div>
+          <input
+            id="media-file-input"
+            type="file"
+            accept="audio/*"
+            multiple
+            style={{ display: "none" }}
+            onChange={(e) => { if (e.target.files?.length) { simulateUpload(e.target.files); e.target.value = ""; } }}
+          />
+        </div>
+
+        {/* Upload Progress */}
+        {uploadProgress.length > 0 && (
+          <div className="upload-progress-list">
+            {uploadProgress.map((u) => (
+              <div className="upload-progress-item" key={u.id}>
+                <div className="upload-progress-info">
+                  <span className="upload-progress-name"><i className="fas fa-file-audio"></i> {u.name}</span>
+                  <span className="upload-progress-pct">{Math.round(u.progress)}%</span>
+                </div>
+                <div className="upload-progress-bar">
+                  <div className="upload-progress-fill" style={{ width: `${u.progress}%` }}></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Search & Filter */}
+        <div className="media-toolbar">
+          <div className="media-search-wrapper">
+            <i className="fas fa-search"></i>
+            <input
+              type="text"
+              className="media-search-input"
+              placeholder="Search by title, artist, album..."
+              value={mediaSearch}
+              onChange={(e) => setMediaSearch(e.target.value)}
+            />
+            {mediaSearch && (
+              <button className="media-search-clear" onClick={() => setMediaSearch("")}>
+                <i className="fas fa-xmark"></i>
+              </button>
+            )}
+          </div>
+          <select
+            className="media-filter-select"
+            value={mediaFilterPlaylist}
+            onChange={(e) => setMediaFilterPlaylist(e.target.value)}
+          >
+            <option value="">All Playlists</option>
+            {playlists.map((pl) => (
+              <option key={pl.id} value={pl.id}>{pl.name}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Bulk Actions Bar */}
+        {selectedFileIds.size > 0 && (
+          <div className="media-bulk-bar">
+            <span className="media-bulk-count">{selectedFileIds.size} selected</span>
+            <div className="media-bulk-actions">
+              <button className="media-bulk-btn" onClick={handleBulkAddPlaylist} disabled={mediaActionLoading}>
+                {mediaActionLoading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-list"></i>} Add to Playlist
+              </button>
+              <button className="media-bulk-btn danger" onClick={handleBulkDelete} disabled={mediaActionLoading}>
+                {mediaActionLoading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-trash-can"></i>} Delete
+              </button>
+            </div>
+            <button className="media-bulk-clear" onClick={() => setSelectedFileIds(new Set())}>
+              <i className="fas fa-xmark"></i>
+            </button>
+          </div>
+        )}
+
+        {/* File Count */}
+        <div className="media-count">
+          {filteredFiles.length} of {stationFiles.length} files
+        </div>
+
+        {/* File List */}
+        <div className="media-file-list">
+          {filteredFiles.length === 0 ? (
+            <div className="media-empty">
+              <i className="fas fa-music"></i>
+              <p>No files found matching your search</p>
+            </div>
+          ) : (
+            filteredFiles.map((file) => {
+              const isEditing = editingFile === file.id;
+              const isSelected = selectedFileIds.has(file.id);
+              return (
+                <div className={`media-file-item ${isSelected ? "selected" : ""}`} key={file.id}>
+                  {/* Checkbox */}
+                  <div
+                    className={`media-checkbox ${isSelected ? "checked" : ""}`}
+                    onClick={() => toggleFileSelect(file.id)}
+                  >
+                    {isSelected && <i className="fas fa-check"></i>}
+                  </div>
+
+                  {/* Album Art */}
+                  <div className="media-file-cover">
+                    <img src={file.albumArt || "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=60&h=60&fit=crop"} alt={file.title} />
+                  </div>
+
+                  {/* File Info */}
+                  <div className="media-file-info">
+                    {isEditing ? (
+                      <div className="media-edit-fields">
+                        <input
+                          className="media-edit-input"
+                          value={editTitle}
+                          onChange={(e) => setEditTitle(e.target.value)}
+                          placeholder="Title"
+                          autoFocus
+                        />
+                        <input
+                          className="media-edit-input"
+                          value={editArtist}
+                          onChange={(e) => setEditArtist(e.target.value)}
+                          placeholder="Artist"
+                        />
+                        <input
+                          className="media-edit-input"
+                          value={editAlbum}
+                          onChange={(e) => setEditAlbum(e.target.value)}
+                          placeholder="Album"
+                        />
+                        <div className="media-edit-actions">
+                          <button className="media-edit-save" onClick={saveEdit} disabled={mediaActionLoading}>
+                            {mediaActionLoading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-check"></i>} Save
+                          </button>
+                          <button className="media-edit-cancel" onClick={cancelEdit} disabled={mediaActionLoading}>
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="media-file-title">{file.title}</div>
+                        <div className="media-file-artist">{file.artist} · {file.album}</div>
+                        <div className="media-file-tags">
+                          <span className="media-file-tag">{file.genre}</span>
+                          <span className="media-file-tag">{file.duration}</span>
+                          <span className="media-file-tag">{file.size}</span>
+                        </div>
+                        <div className="media-file-playlists">
+                          {file.playlists.map((plId) => {
+                            const pl = playlists.find((p) => p.id === plId);
+                            return pl ? (
+                              <span className="media-playlist-chip" key={plId}>{pl.name}</span>
+                            ) : null;
+                          })}
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Actions */}
+                  <div className="media-file-actions-relative">
+                    <button
+                      className="media-file-menu"
+                      onClick={(e) => {
+                        if (showMediaActions === file.id) {
+                          setShowMediaActions(null);
+                          setMenuPos(null);
+                        } else {
+                          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                          setMenuPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+                          setShowMediaActions(file.id);
+                        }
+                      }}
+                    >
+                      <i className="fas fa-ellipsis-h"></i>
+                    </button>
+
+                    {showMediaActions === file.id && menuPos && (
+                      <>
+                        <div className="media-actions-overlay" onClick={() => { setShowMediaActions(null); setMenuPos(null); }}></div>
+                        <div className="media-actions-sheet" style={{ position: "fixed", top: menuPos.top, right: menuPos.right, left: "auto", bottom: "auto" }}>                          <button className="media-action-btn" onClick={() => { startEdit(file); setShowMediaActions(null); setMenuPos(null); }}>
+                            <span className="media-action-icon blue"><i className="fas fa-pen"></i></span>
+                            <div className="media-action-info">
+                              <h4>Edit Metadata</h4>
+                              <p>Change title, artist, album, genre</p>
+                            </div>
+                          </button>
+                          <button className="media-action-btn" onClick={() => { setSelectedFileIds(new Set([file.id])); setPlaylistPickerOpen(true); setShowMediaActions(null); setMenuPos(null); }}>
+                            <span className="media-action-icon gold"><i className="fas fa-list"></i></span>
+                            <div className="media-action-info">
+                              <h4>Add to Playlist</h4>
+                              <p>Include in a program rotation</p>
+                            </div>
+                          </button>
+                          <button className="media-action-btn" onClick={() => { handleDeleteFile(); setMenuPos(null); }} disabled={mediaActionLoading}>
+                            <span className="media-action-icon red">{mediaActionLoading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-trash-can"></i>}</span>
+                            <div className="media-action-info">
+                              <h4>Delete</h4>
+                              <p>Permanently remove this file</p>
+                            </div>
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Playlist Picker Modal */}
+        {playlistPickerOpen && (
+          <>
+            <div className="media-modal-overlay" onClick={() => setPlaylistPickerOpen(false)}></div>
+            <div className="media-modal-sheet">
+              <div className="media-modal-handle"></div>
+              <div className="media-modal-header">
+                <h2>Add to Playlist</h2>
+                <p>Select a playlist for {selectedFileIds.size} track{selectedFileIds.size !== 1 ? "s" : ""}</p>
+              </div>
+              <div className="media-modal-body">
+                {playlists.map((pl) => (
+                  <div
+                    className="media-pl-item"
+                    key={pl.id}
+                    onClick={() => addToPlaylist(pl.id)}
+                    style={{ opacity: mediaActionLoading ? 0.6 : 1, pointerEvents: mediaActionLoading ? "none" : "auto" }}
+                  >
+                    <div className="media-pl-icon">
+                      {mediaActionLoading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-list"></i>}
+                    </div>
+                    <div className="media-pl-info">
+                      <div className="media-pl-name">{pl.name}</div>
+                    </div>
+                    <i className="fas fa-chevron-right media-pl-arrow"></i>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
+
+  // ========== PLAYLISTS SECTION ==========
+  const renderPlaylists = () => {
+    const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+    const plSongsFor = (plId: string) =>
+      stationFiles.filter((f) => f.playlists.includes(plId));
+
+    const createPlaylist = async () => {
+      if (plActionLoading) return;
+      setPlActionLoading(true);
+      try {
+        const newPl = await apiCreatePlaylist({
+          name: plForm.name || "New Playlist",
+          type: plCreateType,
+          order: plCreateOrder,
+          weight: plForm.weight,
+          schedule: plCreateType === "scheduled"
+            ? { days: plSchedule.days.map((d: string) => DAYS.indexOf(d)), startTime: plSchedule.startTime, endTime: plSchedule.endTime }
+            : undefined,
+        });
+        setPlaylists([...playlists, newPl]);
+        setShowCreatePlaylist(false);
+        setPlForm({ name: "", type: "standard", order: "shuffle", weight: 10 });
+        setPlSchedule({ days: [], startTime: "09:00", endTime: "17:00" });
+        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Playlist Created", message: `"${newPl.name}" created successfully`, type: "success", duration: 2500 } }));
+        await hapticSuccess();
+      } catch {
+        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Error", message: "Failed to create playlist — try again", type: "error", duration: 3000 } }));
+      }
+      setPlActionLoading(false);
+    };
+
+    const saveEditedPlaylist = async () => {
+      if (!editingPlId || plActionLoading) return;
+      setPlActionLoading(true);
+      try {
+        const updated = await apiUpdatePlaylist(editingPlId, {
+          name: plForm.name,
+          type: plCreateType,
+          order: plCreateOrder,
+          weight: plForm.weight,
+          schedule: plCreateType === "scheduled"
+            ? { days: plSchedule.days.map((d: string) => DAYS.indexOf(d)), startTime: plSchedule.startTime, endTime: plSchedule.endTime }
+            : undefined,
+        });
+        setPlaylists(playlists.map((p) => p.id === editingPlId ? { ...p, ...updated } : p));
+        setShowEditPlModal(false);
+        setEditingPlId(null);
+        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Changes Saved", message: "Playlist updated", type: "success", duration: 2500 } }));
+        await hapticSuccess();
+      } catch {
+        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Error", message: "Failed to update playlist", type: "error", duration: 3000 } }));
+      }
+      setPlActionLoading(false);
+    };
+
+    const togglePlaylistEnabled = async (id: string) => {
+      if (plActionLoading) return;
+      setPlActionLoading(true);
+      try {
+        const updated = await apiTogglePlaylist(id);
+        setPlaylists(playlists.map((p) => p.id === id ? updated : p));
+        await hapticSuccess();
+      } catch {
+        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Error", message: "Failed to toggle playlist", type: "error", duration: 3000 } }));
+      }
+      setPlActionLoading(false);
+    };
+
+    const deletePlaylist = async (id: string) => {
+      if (plActionLoading) return;
+      setPlActionLoading(true);
+      try {
+        await apiDeletePlaylist(id);
+        setPlaylists(playlists.filter((p) => p.id !== id));
+        if (selectedPlId === id) setSelectedPlId(null);
+        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Playlist Deleted", message: "Playlist removed", type: "success", duration: 2500 } }));
+        await hapticSuccess();
+      } catch {
+        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Error", message: "Failed to delete playlist", type: "error", duration: 3000 } }));
+      }
+      setPlActionLoading(false);
+      setPlConfirmDelete(null);
+    };
+
+    const removeSongFromPlaylist = async (plId: string, songId: string) => {
+      if (plActionLoading) return;
+      setPlActionLoading(true);
+      const ok = await apiRemoveSong(plId, songId);
+      if (ok) {
+        setStationFiles(stationFiles.map((f) =>
+          f.id === songId ? { ...f, playlists: f.playlists.filter((p) => p !== plId) } : f
+        ));
+        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Song Removed", message: "Song removed from playlist", type: "success", duration: 2500 } }));
+      } else {
+        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Error", message: "Failed to remove song", type: "error", duration: 3000 } }));
+      }
+      setPlActionLoading(false);
+    };
+
+    const addSongsToPlaylist = async () => {
+      if (!addSongsPlId || addSongsSelected.size === 0 || plActionLoading) return;
+      setPlActionLoading(true);
+      try {
+        await apiAddSongs(addSongsPlId, [...addSongsSelected]);
+        setStationFiles(stationFiles.map((f) =>
+          addSongsSelected.has(f.id) && !f.playlists.includes(addSongsPlId)
+            ? { ...f, playlists: [...f.playlists, addSongsPlId] }
+            : f
+        ));
+        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Songs Added", message: `${addSongsSelected.size} songs added to playlist`, type: "success", duration: 2500 } }));
+        setShowSongPicker(false);
+        setAddSongsPlId(null);
+        setAddSongsSearch("");
+        setAddSongsSelected(new Set());
+      } catch {
+        window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Error", message: "Something went wrong — try again", type: "error", duration: 3000 } }));
+      }
+      setPlActionLoading(false);
+    };
+
+    const toggleScheduleDay = (day: string) => {
+      setPlSchedule((prev) => ({
+        ...prev,
+        days: prev.days.includes(day) ? prev.days.filter((d) => d !== day) : [...prev.days, day],
+      }));
+    };
+
+    const refreshPlaylistData = async () => {
+      setLoadingPlaylists(true);
+      await Promise.all([
+        getPlaylists().then(setPlaylists),
+        getStationFiles().then(setStationFiles),
+      ]).catch(() => {}).finally(() => setLoadingPlaylists(false));
+    };
+
+    // Filter & status helpers
+    const countByType = (type: string) => type === "all" ? playlists.length : playlists.filter((p) => p.type === type).length;
+    const filteredByTab = playlists.filter((p) => plFilterTab === "all" || p.type === plFilterTab);
+    const filteredPlaylists = filteredByTab.filter(
+      (p) => !playlistFilter || p.name.toLowerCase().includes(playlistFilter.toLowerCase())
+    );
+    const getStatus = (pl: Playlist): "active" | "scheduled" | "general" | "disabled" => {
+      if (!pl.enabled) return "disabled";
+      if (pl.enabled && pl.type === "standard") return "general";
+      if (pl.type === "scheduled") return "scheduled";
+      return "general";
+    };
+
+    const selectedPl = selectedPlId ? playlists.find((p) => p.id === selectedPlId) : null;
+    const selectedSongs = selectedPl ? plSongsFor(selectedPl.id) : [];
+    const defaultPl = playlists.find((p) => p.name === "Default");
+    const scheduledPlaylists = playlists.filter((p) => p.type === "scheduled" && p.schedule);
+    const playlistColors: Record<string, string> = {};
+    scheduledPlaylists.forEach((pl, i) => {
+      const palette = ["#E8A838","#3B82F6","#8B5CF6","#10B981","#F43F5E","#14B8A6","#F97316"];
+      playlistColors[pl.id] = palette[i % palette.length];
+    });
+
+    // Open edit modal with pre-filled data
+    const openEditModal = (pl: Playlist) => {
+      setEditingPlId(pl.id);
+      setPlForm({ name: pl.name, type: pl.type, order: pl.order, weight: pl.weight });
+      setPlCreateType(pl.type);
+      setPlCreateOrder(pl.order);
+      if (pl.schedule) {
+        setPlSchedule({ days: pl.schedule.days.map((d) => DAYS[d] || DAYS[0]), startTime: pl.schedule.startTime, endTime: pl.schedule.endTime });
+      } else {
+        setPlSchedule({ days: [], startTime: "09:00", endTime: "17:00" });
+      }
+      setShowEditPlModal(true);
+    };
+
+    if (loadingPlaylists) {
+      return (
+        <div className="pl-content">
+          <div style={{ padding: "16px 0" }}>
+            <div className="skeleton-loading skeleton-line w40 h24" style={{ marginBottom: 16 }}></div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+              <div className="skeleton-loading skeleton-line w20 h32" style={{ borderRadius: 8 }}></div>
+              <div className="skeleton-loading skeleton-line w20 h32" style={{ borderRadius: 8 }}></div>
+              <div className="skeleton-loading skeleton-line w20 h32" style={{ borderRadius: 8 }}></div>
+            </div>
+            {[1,2,3].map((i) => (
+              <div key={i} className="skeleton-card" style={{ padding: 14, marginBottom: 10, display: "flex", alignItems: "center", gap: 12 }}>
+                <div className="skeleton-loading" style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0 }}></div>
+                <div style={{ flex: 1 }}>
+                  <div className="skeleton-loading skeleton-line w60 h20" style={{ marginBottom: 6 }}></div>
+                  <div className="skeleton-loading skeleton-line w40"></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    const nowPlayingPlaylistId = pcActivePlaylist;
+
+    return (
+      <div className="pl-content-new">
+        {/* Top Header */}
+        <div className="pl-new-header">
+          <h2 className="pl-new-heading">Playlists</h2>
+          <button className="pl-create-btn" onClick={() => { setShowCreatePlaylist(true); setPlCreateType("standard"); setPlCreateOrder("shuffle"); setPlForm({ name: "", type: "standard", order: "shuffle", weight: 10 }); setPlSchedule({ days: [], startTime: "09:00", endTime: "17:00" }); }}>
+            <i className="fas fa-plus"></i> New Playlist
+          </button>
+        </div>
+
+        {/* Filter Tabs */}
+        <div className="pl-filter-tabs">
+          {[
+            { id: "all", label: "All" },
+            { id: "scheduled", label: "Scheduled" },
+            { id: "standard", label: "General" },
+            { id: "on_demand", label: "On Demand" },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              className={`pl-filter-tab ${plFilterTab === tab.id ? "active" : ""}`}
+              onClick={() => { setPlFilterTab(tab.id); setSelectedPlId(null); }}
+            >
+              {tab.label}
+              {countByType(tab.id) > 0 && <span className="pl-filter-count">{countByType(tab.id)}</span>}
+            </button>
+          ))}
+          <div className="pl-search-wrapper" style={{ marginLeft: "auto", maxWidth: 200 }}>
+            <i className="fas fa-search"></i>
+            <input type="text" className="pl-search-input" placeholder="Search..." value={playlistFilter}
+              onChange={(e) => setPlaylistFilter(e.target.value)} />
+          </div>
+        </div>
+
+        {/* Schedule View Toggle (only when Scheduled tab is active) */}
+        {plFilterTab === "scheduled" && (
+          <div className="pl-sched-view-toggle">
+            <button
+              className={`pl-sched-toggle-btn ${showScheduleView ? "active" : ""}`}
+              onClick={() => setShowScheduleView(!showScheduleView)}
+            >
+              <i className={`fas ${showScheduleView ? "fa-list" : "fa-calendar-week"}`}></i>
+              {showScheduleView ? "List View" : "Schedule View"}
+            </button>
+          </div>
+        )}
+
+        {/* Schedule View (calendar grid) */}
+        {plFilterTab === "scheduled" && showScheduleView && (
+          <div className="pl-schedule-view">
+            <div className="pl-sv-header">
+              <h3 className="pl-sv-title">Weekly Schedule</h3>
+            </div>
+            <div className="pl-sv-grid-wrapper">
+              <div className="pl-sv-grid">
+                {/* Time labels column + 7 day columns */}
+                <div className="pl-sv-corner"></div>
+                {DAYS.map((d, i) => {
+                  const todayIdx = new Date().getDay();
+                  const dayNum = i === 6 ? 0 : i + 1;
+                  const isToday = dayNum === todayIdx;
+                  return (
+                    <div key={d} className={`pl-sv-day-header ${isToday ? "today" : ""}`}>
+                      {d}
+                    </div>
+                  );
+                })}
+                {/* 24 hour rows */}
+                {Array.from({ length: 24 }, (_, hour) => (
+                  <React.Fragment key={hour}>
+                    <div className="pl-sv-time">{hour === 0 ? "12AM" : hour < 12 ? `${hour}AM` : hour === 12 ? "12PM" : `${hour - 12}PM`}</div>
+                    {DAYS.map((d, dayIdx) => {
+                      const dayNum = dayIdx === 6 ? 0 : dayIdx + 1;
+                      const todayIdx = new Date().getDay();
+                      const isToday = dayNum === todayIdx;
+                      const hourStart = `${String(hour).padStart(2, "0")}:00`;
+                      const hourEnd = `${String(hour + 1).padStart(2, "0")}:00`;
+                      const blocks = scheduledPlaylists.filter((pl) => {
+                        if (!pl.schedule) return false;
+                        return pl.schedule.days.includes(dayNum) &&
+                          pl.schedule.startTime <= hourEnd &&
+                          pl.schedule.endTime > hourStart;
+                      });
+                      return (
+                        <div key={`${d}-${hour}`} className={`pl-sv-cell ${isToday ? "today" : ""} ${blocks.length > 0 ? "has-block" : ""}`}
+                          style={blocks.length > 0 ? { background: `rgba(232,168,56,${Math.min(0.08 * blocks.length, 0.25)})` } : {}}>
+                          {blocks.map((pl) => (
+                            <div
+                              key={pl.id}
+                              className="pl-sv-block"
+                              style={{ background: playlistColors[pl.id] || "#E8A838" }}
+                              title={`${pl.name} (${pl.schedule!.startTime} - ${pl.schedule!.endTime})`}
+                              onClick={() => setSelectedPlId(pl.id)}
+                            >
+                              {pl.name}
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })}
+                  </React.Fragment>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Two-Panel Layout (only when not showing schedule view, or when not on scheduled tab) */}
+        {!(plFilterTab === "scheduled" && showScheduleView) && (
+        <div className="pl-two-panel">
+          {/* LEFT PANEL */}
+          <div className={`pl-left-panel ${selectedPlId ? "pl-left-compact" : ""}`}>
+            {playlists.length === 0 ? (
+              <div className="pl-empty-state">
+                <i className="fas fa-list"></i>
+                <h4>No playlists yet</h4>
+                <p>Create your first playlist to start organizing your music</p>
+                <button className="pl-create-btn" onClick={() => { setShowCreatePlaylist(true); setPlCreateType("standard"); setPlForm({ name: "", type: "standard", order: "shuffle", weight: 10 }); }}>
+                  <i className="fas fa-plus"></i> Create Playlist
+                </button>
+              </div>
+            ) : filteredPlaylists.length === 0 ? (
+              <div className="pl-empty-state">
+                <i className="fas fa-filter"></i>
+                <p>No playlists match this filter</p>
+              </div>
+            ) : (
+              <div className="pl-card-list">
+                {filteredPlaylists.map((pl) => {
+                  const isSelected = selectedPlId === pl.id;
+                  const isPlaying = nowPlayingPlaylistId === pl.id;
+                  const status = getStatus(pl);
+                  const songs = plSongsFor(pl.id);
+                  const totalDuration = songs.reduce((acc, s) => {
+                    const mins = parseInt(s.duration) || 0;
+                    return acc + mins;
+                  }, 0);
+                  return (
+                    <div
+                      key={pl.id}
+                      className={`pl-card-new ${isSelected ? "selected" : ""} ${isPlaying ? "now-playing" : ""} ${pl.name === "Default" ? "default" : ""}`}
+                      onClick={() => setSelectedPlId(isSelected ? null : pl.id)}
+                    >
+                      <div className={`pl-card-status-dot ${status}`}></div>
+                      <div className="pl-card-new-body">
+                        <div className="pl-card-new-top">
+                          <div className="pl-card-new-name">{pl.name}</div>
+                          <span className={`pl-type-badge ${pl.type}`}>{pl.type === "on_demand" ? "On Demand" : pl.type === "scheduled" ? "Scheduled" : "General"}</span>
+                        </div>
+                        <div className="pl-card-new-meta">
+                          {pl.songCount} songs
+                          {pl.schedule && <span> · {pl.schedule.days.map((d: number) => DAYS[d] || DAYS[0]).join(", ")} · {pl.schedule.startTime}–{pl.schedule.endTime}</span>}
+                          {!pl.schedule && <span> · {pl.type === "standard" ? "Always playing as fallback" : "Triggered manually"}</span>}
+                        </div>
+                        {pl.name === "Default" && (
+                          <div className="pl-card-new-tag">
+                            <i className="fas fa-thumbtack"></i> Fallback playlist — always keep active
+                          </div>
+                        )}
+                      </div>
+                      <div className="pl-card-new-actions" onClick={(e) => e.stopPropagation()}>
+                        <button className="pl-card-edit-btn" onClick={() => openEditModal(pl)}>
+                          <i className="fas fa-pen"></i>
+                        </button>
+                        <div className="pl-card-menu-wrapper">
+                          <button className="pl-card-menu-btn" onClick={() => setPlMenuOpen(plMenuOpen === pl.id ? null : pl.id)}>
+                            <i className="fas fa-ellipsis"></i>
+                          </button>
+                          {plMenuOpen === pl.id && (
+                            <>
+                              <div className="pl-menu-overlay" onClick={() => setPlMenuOpen(null)}></div>
+                              <div className="pl-menu-dropdown">
+                                <button className="pl-menu-item" onClick={() => { togglePlaylistEnabled(pl.id); setPlMenuOpen(null); }}>
+                                  <i className={`fas ${pl.enabled ? "fa-pause" : "fa-play"}`}></i>
+                                  {pl.enabled ? "Disable" : "Enable"}
+                                </button>
+                                {pl.name !== "Default" && (
+                                  <button className="pl-menu-item danger" onClick={() => { setPlConfirmDelete(pl.id); setPlMenuOpen(null); }}>
+                                    <i className="fas fa-trash-can"></i> Delete
+                                  </button>
+                                )}
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      {isPlaying && <div className="pl-card-now-playing-badge">Now Playing</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* RIGHT PANEL */}
+          {selectedPl && (
+            <div className="pl-right-panel">
+              {/* Header */}
+              <div className="pl-detail-header">
+                <button className="pl-detail-back" onClick={() => setSelectedPlId(null)}>
+                  <i className="fas fa-chevron-left"></i>
+                </button>
+                <div className="pl-detail-header-info">
+                  <div className="pl-detail-name">{selectedPl.name}</div>
+                  <span className={`pl-type-badge ${selectedPl.type}`}>{selectedPl.type === "on_demand" ? "On Demand" : selectedPl.type === "scheduled" ? "Scheduled" : "General"}</span>
+                </div>
+                <div className="pl-detail-header-actions">
+                  <label className="pl-toggle">
+                    <input type="checkbox" checked={selectedPl.enabled} disabled={plActionLoading}
+                      onChange={() => togglePlaylistEnabled(selectedPl.id)} />
+                    <span className="pl-toggle-slider"></span>
+                  </label>
+                  <button className="pl-detail-edit-btn" onClick={() => openEditModal(selectedPl)}>
+                    <i className="fas fa-pen"></i> Edit
+                  </button>
+                </div>
+              </div>
+
+              {/* Schedule Block */}
+              {selectedPl.schedule && (
+                <div className="pl-detail-schedule">
+                  <div className="pl-detail-section-title"><i className="fas fa-calendar"></i> Schedule</div>
+                  <div className="pl-detail-schedule-body">
+                    <div className="pl-detail-days">
+                      {DAYS.map((d) => (
+                        <span key={d} className={`pl-detail-day-pill ${selectedPl.schedule!.days.includes(DAYS.indexOf(d)) ? "active" : ""}`}>{d}</span>
+                      ))}
+                    </div>
+                    <div className="pl-detail-time">
+                      {selectedPl.schedule.startTime} → {selectedPl.schedule.endTime}
+                    </div>
+                    <div className="pl-detail-next-run">
+                      <i className="fas fa-hourglass-half"></i> Next run: Scheduled daily
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Songs Section */}
+              <div className="pl-detail-songs">
+                <div className="pl-detail-songs-header">
+                  <span className="pl-detail-section-title"><i className="fas fa-music"></i> Songs ({selectedSongs.length})</span>
+                  <button className="pl-detail-add-songs-btn" onClick={() => { setAddSongsPlId(selectedPl.id); setAddSongsSearch(""); setAddSongsSelected(new Set()); setShowSongPicker(true); }}>
+                    <i className="fas fa-plus"></i> Add Songs
+                  </button>
+                </div>
+
+                {selectedSongs.length === 0 ? (
+                  <div className="pl-detail-empty-songs">
+                    <i className="fas fa-music"></i>
+                    <p>No songs yet</p>
+                    <span>Tap &quot;+ Add Songs&quot; to add music to this playlist</span>
+                  </div>
+                ) : (
+                  <div className="pl-detail-song-list">
+                    {selectedSongs.map((song, idx) => (
+                      <div className="pl-detail-song-item" key={song.id}>
+                        <span className="pl-detail-song-drag"><i className="fas fa-grip-vertical"></i></span>
+                        <img className="pl-detail-song-cover" src={song.albumArt || "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=40&h=40&fit=crop"} alt={song.title} />
+                        <div className="pl-detail-song-info">
+                          <div className="pl-detail-song-title">{song.title}</div>
+                          <div className="pl-detail-song-artist">{song.artist || "Unknown Artist"}</div>
+                        </div>
+                        <span className="pl-detail-song-duration">{song.duration}</span>
+                        <button className="pl-detail-song-remove" onClick={() => removeSongFromPlaylist(selectedPl.id, song.id)} title="Remove">
+                          <i className="fas fa-xmark"></i>
+                        </button>
+                      </div>
+                    ))}
+                    <div className="pl-detail-total-duration">
+                      Total duration: {Math.floor(selectedSongs.reduce((acc, s) => acc + (parseInt(s.duration) || 0), 0) / 60)} mins {selectedSongs.reduce((acc, s) => acc + (parseInt(s.duration) || 0), 0) % 60} secs
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+        )}
+
+        {/* ========== CREATE / EDIT MODAL ========== */}
+        {(showCreatePlaylist || showEditPlModal) && (
+          <>
+            <div className="media-modal-overlay" onClick={() => { setShowCreatePlaylist(false); setShowEditPlModal(false); setEditingPlId(null); }}></div>
+            <div className="media-modal-sheet">
+              <div className="media-modal-handle"></div>
+              <div className="media-modal-header">
+                <h2>{showEditPlModal ? "Edit Playlist" : "Create New Playlist"}</h2>
+                <button className="media-modal-close" onClick={() => { setShowCreatePlaylist(false); setShowEditPlModal(false); setEditingPlId(null); }}><i className="fas fa-xmark"></i></button>
+              </div>
+              <div className="media-modal-body" style={{ padding: "0 20px 20px" }}>
+                {/* Name */}
+                <div className="pl-form-row" style={{ marginBottom: 14 }}>
+                  <label>Playlist Name</label>
+                  <input type="text" className="pl-form-input" value={plForm.name} maxLength={100}
+                    onChange={(e) => setPlForm({ ...plForm, name: e.target.value })} placeholder="e.g. Morning Devotion" />
+                </div>
+
+                {/* Type */}
+                <div className="pl-form-row" style={{ marginBottom: 14 }}>
+                  <label>Type</label>
+                  <div className="pl-type-options">
+                    <label className={`pl-type-option ${plCreateType === "standard" ? "active" : ""}`}>
+                      <input type="radio" name="plType" checked={plCreateType === "standard"} onChange={() => setPlCreateType("standard")} />
+                      <span className="pl-type-option-label">General Rotation</span>
+                      <span className="pl-type-option-desc">Always plays as fallback</span>
+                    </label>
+                    <label className={`pl-type-option ${plCreateType === "scheduled" ? "active" : ""}`}>
+                      <input type="radio" name="plType" checked={plCreateType === "scheduled"} onChange={() => setPlCreateType("scheduled")} />
+                      <span className="pl-type-option-label">Scheduled</span>
+                      <span className="pl-type-option-desc">Plays at set times</span>
+                    </label>
+                    <label className={`pl-type-option ${plCreateType === "on_demand" ? "active" : ""}`}>
+                      <input type="radio" name="plType" checked={plCreateType === "on_demand"} onChange={() => setPlCreateType("on_demand")} />
+                      <span className="pl-type-option-label">On Demand</span>
+                      <span className="pl-type-option-desc">Triggered manually</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Play Order */}
+                <div className="pl-form-row" style={{ marginBottom: 14 }}>
+                  <label>Play Order</label>
+                  <div className="pl-order-options">
+                    <label className={`pl-order-option ${plCreateOrder === "shuffle" ? "active" : ""}`}>
+                      <input type="radio" name="plOrder" checked={plCreateOrder === "shuffle"} onChange={() => setPlCreateOrder("shuffle")} />
+                      <span>Shuffle</span>
+                    </label>
+                    <label className={`pl-order-option ${plCreateOrder === "sequential" ? "active" : ""}`}>
+                      <input type="radio" name="plOrder" checked={plCreateOrder === "sequential"} onChange={() => setPlCreateOrder("sequential")} />
+                      <span>Sequential</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Weight */}
+                <div className="pl-form-row" style={{ marginBottom: 14 }}>
+                  <label>Weight ({plForm.weight})</label>
+                  <input type="range" min="1" max="20" className="pl-form-range" value={plForm.weight}
+                    onChange={(e) => setPlForm({ ...plForm, weight: parseInt(e.target.value) })} />
+                </div>
+
+                {/* Schedule (only for scheduled) */}
+                {plCreateType === "scheduled" && (
+                  <div className="pl-schedule-config" style={{ marginBottom: 14 }}>
+                    <label>Schedule</label>
+                    <div className="pl-day-chips">
+                      {DAYS.map((d) => (
+                        <button key={d} className={`pl-day-chip ${plSchedule.days.includes(d) ? "active" : ""}`}
+                          onClick={() => toggleScheduleDay(d)}>{d}</button>
+                      ))}
+                    </div>
+                    <div className="pl-time-row" style={{ marginTop: 10 }}>
+                      <div>
+                        <label>Start Time</label>
+                        <input type="time" className="pl-form-input" value={plSchedule.startTime}
+                          onChange={(e) => setPlSchedule({ ...plSchedule, startTime: e.target.value })} />
+                      </div>
+                      <div>
+                        <label>End Time</label>
+                        <input type="time" className="pl-form-input" value={plSchedule.endTime}
+                          onChange={(e) => setPlSchedule({ ...plSchedule, endTime: e.target.value })} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Actions */}
+                <div className="pl-form-actions" style={{ justifyContent: "flex-end", marginTop: 8 }}>
+                  {showEditPlModal && (
+                    <button className="pl-form-danger" onClick={() => { setPlConfirmDelete(editingPlId); }} disabled={plActionLoading || editingPlId ? playlists.find(p => p.id === editingPlId)?.name === "Default" : false}>
+                      <i className="fas fa-trash-can"></i> Delete
+                    </button>
+                  )}
+                  <button className="pl-form-cancel" onClick={() => { setShowCreatePlaylist(false); setShowEditPlModal(false); setEditingPlId(null); }} disabled={plActionLoading}>
+                    Cancel
+                  </button>
+                  <button className="pl-form-save" onClick={showEditPlModal ? saveEditedPlaylist : createPlaylist}
+                    disabled={plActionLoading || !plForm.name.trim()}>
+                    {plActionLoading ? <i className="fas fa-spinner fa-spin"></i> : null}
+                    {plActionLoading ? " Saving..." : showEditPlModal ? "Save Changes" : "Create Playlist"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ========== CONFIRM DELETE DIALOG ========== */}
+        {plConfirmDelete && (
+          <>
+            <div className="media-modal-overlay" onClick={() => setPlConfirmDelete(null)}></div>
+            <div className="media-modal-sheet" style={{ maxWidth: 360 }}>
+              <div className="media-modal-handle"></div>
+              <div className="media-modal-header">
+                <h2>Delete Playlist?</h2>
+              </div>
+              <div className="media-modal-body" style={{ padding: "0 20px 20px", textAlign: "center" }}>
+                <p style={{ fontSize: 14, color: "var(--text-secondary)", margin: "8px 0 16px" }}>
+                  This will permanently remove &quot;{playlists.find(p => p.id === plConfirmDelete)?.name}&quot; and remove it from the rotation.
+                </p>
+                <div className="pl-form-actions" style={{ justifyContent: "center" }}>
+                  <button className="pl-form-cancel" onClick={() => setPlConfirmDelete(null)}>Cancel</button>
+                  <button className="pl-form-danger" onClick={() => deletePlaylist(plConfirmDelete)} disabled={plActionLoading}>
+                    {plActionLoading ? <i className="fas fa-spinner fa-spin"></i> : null}
+                    {plActionLoading ? " Deleting..." : "Delete"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ========== ADD SONGS MODAL ========== */}
+        {showSongPicker && (
+          <>
+            <div className="media-modal-overlay" onClick={() => { setShowSongPicker(false); setAddSongsPlId(null); setAddSongsSearch(""); setAddSongsSelected(new Set()); }}></div>
+            <div className="media-modal-sheet">
+              <div className="media-modal-handle"></div>
+              <div className="media-modal-header">
+                <h2>Add Songs to {playlists.find(p => p.id === addSongsPlId)?.name || "Playlist"}</h2>
+                <button className="media-modal-close" onClick={() => { setShowSongPicker(false); setAddSongsPlId(null); setAddSongsSearch(""); setAddSongsSelected(new Set()); }}><i className="fas fa-xmark"></i></button>
+              </div>
+              <div className="pl-picker-toolbar">
+                <i className="fas fa-search"></i>
+                <input type="text" className="pl-picker-search" placeholder="Search songs..." value={addSongsSearch}
+                  onChange={(e) => setAddSongsSearch(e.target.value)} />
+              </div>
+              <div className="media-modal-body">
+                {stationFiles.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: 20, color: "#888" }}>
+                    <i className="fas fa-music" style={{ fontSize: 28, marginBottom: 8, opacity: 0.4 }}></i>
+                    <div>No media files found. Upload music first.</div>
+                  </div>
+                ) : (
+                  stationFiles
+                    .filter((s) => !addSongsSearch || s.title.toLowerCase().includes(addSongsSearch.toLowerCase()) || s.artist?.toLowerCase().includes(addSongsSearch.toLowerCase()))
+                    .map((song) => {
+                      const alreadyInPlaylist = addSongsPlId && song.playlists.includes(addSongsPlId);
+                      const isChecked = addSongsSelected.has(song.id);
+                      return (
+                        <div
+                          className={`pl-picker-item ${alreadyInPlaylist ? "disabled" : ""} ${isChecked ? "selected" : ""}`}
+                          key={song.id}
+                          onClick={() => {
+                            if (alreadyInPlaylist) return;
+                            const next = new Set(addSongsSelected);
+                            if (next.has(song.id)) next.delete(song.id);
+                            else next.add(song.id);
+                            setAddSongsSelected(next);
+                          }}
+                        >
+                          <div className={`pl-picker-checkbox ${isChecked ? "checked" : ""}`}>
+                            {isChecked && <i className="fas fa-check"></i>}
+                          </div>
+                          <img className="pl-picker-cover" src={song.albumArt || "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=40&h=40&fit=crop"} alt={song.title} />
+                          <div className="pl-picker-info">
+                            <div className="pl-picker-title">{song.title}</div>
+                            <div className="pl-picker-artist">{song.artist || "Unknown"} · {song.duration}</div>
+                          </div>
+                          {alreadyInPlaylist && <span className="pl-picker-already">In playlist</span>}
+                        </div>
+                      );
+                    })
+                )}
+              </div>
+              <div className="pl-picker-footer">
+                <span className="pl-picker-count">{addSongsSelected.size} song{addSongsSelected.size !== 1 ? "s" : ""} selected</span>
+                <div className="pl-form-actions">
+                  <button className="pl-form-cancel" onClick={() => { setShowSongPicker(false); setAddSongsPlId(null); setAddSongsSearch(""); setAddSongsSelected(new Set()); }}>Cancel</button>
+                  <button className="pl-form-save" onClick={addSongsToPlaylist} disabled={addSongsSelected.size === 0 || plActionLoading}>
+                    {plActionLoading ? <i className="fas fa-spinner fa-spin"></i> : null}
+                    {plActionLoading ? " Adding..." : "Add to Playlist"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
+
+  // ========== GO LIVE HELPERS ==========
+  const saveStreamer = async () => {
+    if (glActionLoading) return;
+    setGlActionLoading("save");
+    try {
+      if (editingStreamerId) {
+        const updated = await updateStreamer(editingStreamerId, {
+          displayName: streamerForm.displayName,
+          username: streamerForm.username,
+        });
+        setStreamers((prev) => prev.map((s) => (s.id === editingStreamerId ? updated : s)));
+        // If a new password was provided, store it locally
+        if (streamerForm.password) {
+          setStreamerPasswords((prev) => ({ ...prev, [editingStreamerId]: streamerForm.password }));
+        }
+      } else {
+        const created = await createStreamer({
+          displayName: streamerForm.displayName,
+          username: streamerForm.username,
+          password: streamerForm.password,
+        });
+        setStreamers((prev) => [...prev, created]);
+        // Store the password locally since API won't return it
+        if (streamerForm.password) {
+          setStreamerPasswords((prev) => ({ ...prev, [created.id]: streamerForm.password }));
+        }
+        setSelectedStreamerId(created.id);
+      }
+      setShowStreamerForm(false);
+      setEditingStreamerId(null);
+      setStreamerForm({ displayName: "", username: "", password: "" });
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "Streamer Saved", message: editingStreamerId ? "Streamer updated" : "Streamer created", type: "success", duration: 2500 },
+      }));
+      await hapticSuccess();
+    } catch {
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "Error", message: "Failed to save streamer", type: "error", duration: 3000 },
+      }));
+    }
+    setGlActionLoading(null);
+  };
+
+  const deleteStreamerHandler = async (id: string) => {
+    if (glActionLoading) return;
+    setGlActionLoading(id);
+    try {
+      await deleteStreamer(id);
+      setStreamers((prev) => prev.filter((s) => s.id !== id));
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "Deleted", message: "Streamer removed", type: "success", duration: 2500 },
+      }));
+      await hapticSuccess();
+    } catch {
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "Error", message: "Failed to delete streamer", type: "error", duration: 3000 },
+      }));
+    }
+    setGlActionLoading(null);
+  };
+
+  const copyToClipboard = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyFeedback(label);
+      setTimeout(() => setCopyFeedback(null), 2000);
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "Copied", message: `${label} copied to clipboard`, type: "success", duration: 1500 },
+      }));
+    } catch {}
+  };
+
+  // ========== GO LIVE SECTION ==========
+  const renderGoLive = () => {
+    const activeStreamer = streamers.find((s) => s.isLive);
+    const selStreamer = streamers.find((s) => s.id === selectedStreamerId) || activeStreamer || streamers[0] || null;
+    const selPassword = selStreamer ? (streamerPasswords[selStreamer.id] || MASTER_PW) : MASTER_PW;
+
+    return (
+      <div className="golive-content">
+        {/* Live Status Card */}
+        <div className="gl-status-card">
+          <div className="gl-status-left">
+            <div className={`gl-live-indicator ${isLive ? "live" : ""}`}>
+              <span className={`gl-live-dot ${isLive ? "pulse" : ""}`}></span>
+              <span className="gl-live-label">{isLive ? "LIVE" : "OFF AIR"}</span>
+            </div>
+          </div>
+          <div className="gl-status-info">
+            <div className="gl-status-title">{isLive ? "You are live!" : "Station is offline"}</div>
+            <div className="gl-status-sub">
+              {isLive
+                ? `Broadcasting as ${activeStreamer?.displayName || "someone"}`
+                : selStreamer
+                  ? `Selected: ${selStreamer.displayName}`
+                  : "Add a streamer to start broadcasting"
+              }
+            </div>
+            {listeners > 0 && (
+              <div className="gl-listeners">
+                <i className="fas fa-headphones"></i> {listeners} listening now
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* == Embedded Player (monitor your broadcast) == */}
+        <div className="gl-player-container">
+          <div className="gl-player-header">
+            <i className="fas fa-headphones"></i>
+            <span>Monitor Broadcast</span>
+            <span className={`gl-player-badge ${isLive ? "live" : ""}`}>
+              <span className={`gl-player-dot ${isLive ? "pulse" : ""}`}></span>
+              {isLive ? "LIVE" : "Off Air"}
+            </span>
+          </div>
+          <iframe
+            className="gl-player-iframe"
+            src="https://azuracast.histoview.co.ke/public/turningpoint_church/embed?autoplay=true"
+            allow="autoplay"
+            title="Station Player"
+            sandbox="allow-scripts allow-same-origin allow-forms"
+          />
+        </div>
+
+        {/* Connection Details Card — only when a streamer is selected */}
+        {selStreamer && (
+          <div className="section-block">
+            <div className="section-block-header">
+              <h3><i className="fas fa-plug" style={{ marginRight: 6 }}></i>Connection Details</h3>
+              <span className="section-block-count">
+                <i className="fas fa-user"></i> {selStreamer.displayName}
+              </span>
+            </div>
+            <div className="gl-connection-box">
+              <div className="gl-conn-row" onClick={() => copyToClipboard("173.249.50.98", "Server")}>
+                <div className="gl-conn-label">
+                  <i className="fas fa-server"></i>
+                  <span>Server</span>
+                </div>
+                <div className="gl-conn-value">
+                  <span>173.249.50.98</span>
+                  <i className={`fas ${copyFeedback === "Server" ? "fa-check" : "fa-copy"}`}></i>
+                </div>
+              </div>
+              <div className="gl-conn-row" onClick={() => copyToClipboard("8015", "Port")}>
+                <div className="gl-conn-label">
+                  <i className="fas fa-plug"></i>
+                  <span>Port</span>
+                </div>
+                <div className="gl-conn-value">
+                  <span>8015</span>
+                  <i className={`fas ${copyFeedback === "Port" ? "fa-check" : "fa-copy"}`}></i>
+                </div>
+              </div>
+              <div className="gl-conn-row" onClick={() => copyToClipboard("/radio.mp3", "Mount")}>
+                <div className="gl-conn-label">
+                  <i className="fas fa-folder"></i>
+                  <span>Mount</span>
+                </div>
+                <div className="gl-conn-value">
+                  <span>/radio.mp3</span>
+                  <i className={`fas ${copyFeedback === "Mount" ? "fa-check" : "fa-copy"}`}></i>
+                </div>
+              </div>
+              <div className="gl-conn-row" onClick={() => copyToClipboard(selStreamer.username, "Username")}>
+                <div className="gl-conn-label">
+                  <i className="fas fa-user"></i>
+                  <span>Username</span>
+                </div>
+                <div className="gl-conn-value">
+                  <span>{selStreamer.username}</span>
+                  <i className={`fas ${copyFeedback === "Username" ? "fa-check" : "fa-copy"}`}></i>
+                </div>
+              </div>
+              <div className="gl-conn-row">
+                <div className="gl-conn-label">
+                  <i className="fas fa-lock"></i>
+                  <span>Password</span>
+                </div>
+                <div className="gl-conn-value">
+                  <input className="gl-pw-input" type={showPassword ? "text" : "password"}
+                    value={selPassword}
+                    onChange={(e) => {
+                      if (selStreamer) {
+                        setStreamerPasswords((prev) => ({ ...prev, [selStreamer.id]: e.target.value }));
+                      }
+                    }}
+                    placeholder="Enter password"
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  <button className="gl-pw-toggle" onClick={(e) => { e.stopPropagation(); setShowPassword(!showPassword); }}>
+                    <i className={`fas ${showPassword ? "fa-eye-slash" : "fa-eye"}`}></i>
+                  </button>
+                  <i className={`fas ${copyFeedback === "Password" ? "fa-check" : "fa-copy"}`}
+                    onClick={() => copyToClipboard(selPassword, "Password")}></i>
+                </div>
+              </div>
+            </div>
+            <div className="gl-conn-note">
+              <i className="fas fa-info-circle"></i>
+              {streamerPasswords[selStreamer.id]
+                ? `Using ${selStreamer.displayName}'s individual password`
+                : `Using master streamer password (set a custom password in Edit to use a different one)`
+              }
+            </div>
+          </div>
+        )}
+
+        {/* Streamer Accounts — selectable list */}
+        <div className="section-block">
+          <div className="section-block-header">
+            <h3><i className="fas fa-users" style={{ marginRight: 6 }}></i>Streamers</h3>
+            <button className="pl-create-btn" onClick={() => {
+              setStreamerForm({ displayName: "", username: "", password: "" });
+              setEditingStreamerId(null);
+              setShowStreamerForm(true);
+            }}>
+              <i className="fas fa-plus"></i> Add
+            </button>
+          </div>
+          {glLoading ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {[1, 2].map((i) => (
+                <div key={i} className="skeleton-card" style={{ padding: 14, display: "flex", alignItems: "center", gap: 12 }}>
+                  <div className="skeleton-loading" style={{ width: 8, height: 8, borderRadius: "50%" }}></div>
+                  <div style={{ flex: 1 }}>
+                    <div className="skeleton-loading skeleton-line w50 h20" style={{ marginBottom: 4 }}></div>
+                    <div className="skeleton-loading skeleton-line w30"></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : streamers.length === 0 ? (
+            <div className="gl-empty">
+              <i className="fas fa-microphone"></i>
+              <p>No streamers configured</p>
+              <span>Tap &quot;Add&quot; to create your first DJ account</span>
+            </div>
+          ) : (
+            <div className="gl-streamer-list">
+              {streamers.map((s) => (
+                <div
+                  className={`gl-streamer-item ${s.isLive ? "live" : ""} ${selectedStreamerId === s.id ? "selected" : ""}`}
+                  key={s.id}
+                  onClick={() => setSelectedStreamerId(s.id)}
+                >
+                  <div className={`gl-streamer-status ${s.isLive ? "live" : ""}`}>
+                    <span className={`gl-streamer-dot ${s.isLive ? "pulse" : ""}`}></span>
+                  </div>
+                  <div className="gl-streamer-info">
+                    <div className="gl-streamer-name">{s.displayName}</div>
+                    <div className="gl-streamer-user">@{s.username}</div>
+                  </div>
+                  <div className="gl-streamer-meta">
+                    {s.isLive ? (
+                      <span className="gl-streamer-live-tag">LIVE</span>
+                    ) : (
+                      <span className="gl-streamer-off-tag">Offline</span>
+                    )}
+                    {selectedStreamerId === s.id && (
+                      <span className="gl-streamer-check"><i className="fas fa-check-circle"></i></span>
+                    )}
+                  </div>
+                  <div className="gl-streamer-actions">
+                    <button className="gl-streamer-edit"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setStreamerForm({ displayName: s.displayName, username: s.username, password: "" });
+                        setEditingStreamerId(s.id);
+                        setShowStreamerForm(true);
+                      }}>
+                      <i className="fas fa-pen"></i>
+                    </button>
+                    <button className="gl-streamer-delete"
+                      disabled={glActionLoading === s.id}
+                      onClick={(e) => { e.stopPropagation(); deleteStreamerHandler(s.id); }}
+                    >
+                      {glActionLoading === s.id ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-trash-can"></i>}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Broadcast History */}
+        <div className="section-block">
+          <div className="section-block-header">
+            <h3><i className="fas fa-clock-rotate-left" style={{ marginRight: 6 }}></i>Recent Broadcasts</h3>
+            {glBroadcasts.length > 0 && (
+              <span className="section-block-count">{glBroadcasts.length} total</span>
+            )}
+          </div>
+          {glBroadcasts.length === 0 ? (
+            <div className="gl-empty" style={{ padding: "20px 0" }}>
+              <i className="fas fa-tower-broadcast"></i>
+              <p>No broadcasts yet</p>
+              <span>Live sessions will appear here after you broadcast</span>
+            </div>
+          ) : (
+            <div className="gl-history-list">
+              {glBroadcasts.slice(0, 20).map((b, i) => (
+                <div className="gl-history-item" key={i}>
+                  <div className="gl-history-icon">
+                    <i className="fas fa-tower-broadcast"></i>
+                  </div>
+                  <div className="gl-history-info">
+                    <div className="gl-history-date">{b.streamer} · {b.date}</div>
+                    <div className="gl-history-time">{b.startTime} · {b.duration}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ========== STREAMER FORM MODAL ========== */}
+        {showStreamerForm && (
+          <>
+            <div className="media-modal-overlay" onClick={() => { setShowStreamerForm(false); setEditingStreamerId(null); }}></div>
+            <div className="media-modal-sheet">
+              <div className="media-modal-handle"></div>
+              <div className="media-modal-header">
+                <h2>{editingStreamerId ? "Edit Streamer" : "New Streamer"}</h2>
+                <p>Configure a DJ account for live broadcasting</p>
+                <button className="media-modal-close" onClick={() => { setShowStreamerForm(false); setEditingStreamerId(null); }}>
+                  <i className="fas fa-xmark"></i>
+                </button>
+              </div>
+              <div className="media-modal-body">
+                <div className="gl-form-row">
+                  <label>Display Name</label>
+                  <input type="text" className="pl-form-input" value={streamerForm.displayName}
+                    onChange={(e) => setStreamerForm({ ...streamerForm, displayName: e.target.value })}
+                    placeholder="e.g. Pastor John" />
+                </div>
+                <div className="gl-form-row">
+                  <label>Username</label>
+                  <input type="text" className="pl-form-input" value={streamerForm.username}
+                    onChange={(e) => setStreamerForm({ ...streamerForm, username: e.target.value })}
+                    placeholder="e.g. pastorjohn" />
+                </div>
+                <div className="gl-form-row">
+                  <label>Password {editingStreamerId && "(leave blank to keep current)"}</label>
+                  <input type="text" className="pl-form-input" value={streamerForm.password}
+                    onChange={(e) => setStreamerForm({ ...streamerForm, password: e.target.value })}
+                    placeholder={editingStreamerId ? "New password (optional)" : "Streamer password"} />
+                </div>
+                <div className="gl-form-note">
+                  <i className="fas fa-info-circle"></i>
+                  After creating, the streamer can connect using these credentials via any Icecast source client on port 8015.
+                  {editingStreamerId && (
+                    <span style={{ marginTop: 4, display: "block" }}>
+                      Set a new password here to override the master password. If left blank, the master password is used.
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="pl-picker-footer">
+                <span className="pl-picker-count"></span>
+                <div className="pl-form-actions">
+                  <button className="pl-form-cancel" onClick={() => { setShowStreamerForm(false); setEditingStreamerId(null); }}>
+                    Cancel
+                  </button>
+                  <button className="pl-form-save" onClick={saveStreamer}
+                    disabled={glActionLoading === "save" || !streamerForm.displayName || !streamerForm.username}>
+                    {glActionLoading === "save" ? <i className="fas fa-spinner fa-spin"></i> : null}
+                    {glActionLoading === "save" ? " Saving..." : editingStreamerId ? "Save Changes" : "Create Streamer"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
+
+  // ========== RENDER CONTENT ==========
+  const renderContent = () => {
+    switch (activeTab) {
+      case "overview": return renderOverview();
+      case "media": return renderMedia();
+      case "playlists": return renderPlaylists();
+      case "golive": return renderGoLive();
+      default: return renderOverview();
+    }
+  };
+
+  return (
+    <>
+      <style>{`
+        :root {
+          --primary: #E8A838;
+          --primary-light: #F5C76B;
+          --primary-dark: #C48A2A;
+          --bg: #0F0F0F;
+          --surface: #1A1A1A;
+          --surface-elevated: #242424;
+          --surface-card: #1E1E1E;
+          --surface-hover: #2A2A2A;
+          --text-primary: #FFFFFF;
+          --text-secondary: #A0A0A0;
+          --text-tertiary: #6B6B6B;
+          --border: #2A2A2A;
+          --error: #FF6B6B;
+          --success: #4ADE80;
+          --info: #38BDF8;
+          --warning: #FBBF24;
+          --overlay: rgba(0,0,0,0.92);
+          --gradient-start: #E8A838;
+          --gradient-end: #D4762A;
+          --gradient-purple: #8B5CF6;
+          --gradient-blue: #3B82F6;
+          --gradient-red: #EF4444;
+          --gradient-green: #22C55E;
+          --shadow-soft: 0 4px 20px rgba(232,168,56,0.15);
+          --shadow-elevated: 0 8px 32px rgba(0,0,0,0.5);
+          --radius-sm: 10px;
+          --radius-md: 14px;
+          --radius-lg: 18px;
+          --radius-xl: 22px;
+          --radius-full: 50%;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+        html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text-primary); }
+
+        .app-container {
+          height: 100%; display: flex; flex-direction: column; position: relative; overflow: hidden;
+        }
+        @media (min-width: 480px) {
+          .app-container { max-width: 480px; margin: 0 auto; border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
+        }
+
+        .status-bar { height: env(safe-area-inset-top, 24px); min-height: 24px; background: var(--bg); flex-shrink: 0; }
+
+        /* ========== HEADER ========== */
+        .radio-header {
+          padding: 12px 16px 10px;
+          display: flex; align-items: center; gap: 12px;
+          flex-shrink: 0; background: var(--bg); border-bottom: 1px solid var(--border);
+        }
+        .radio-header-logo {
+          width: 40px; height: 40px;
+          background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+          border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center;
+          flex-shrink: 0; box-shadow: var(--shadow-soft);
+        }
+        .radio-header-logo i { font-size: 18px; color: #fff; }
+        .radio-header-info { flex: 1; min-width: 0; }
+        .radio-header-name { font-size: 15px; font-weight: 700; line-height: 1.2; }
+        .radio-header-sub { font-size: 11px; color: var(--text-tertiary); margin-top: 1px; }
+        .radio-header-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+
+        .on-air-badge {
+          display: flex; align-items: center; gap: 6px;
+          padding: 4px 12px; border-radius: 20px;
+          font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        .on-air-badge.live { background: rgba(239,68,68,0.12); color: var(--error); }
+        .on-air-badge.off { background: var(--surface-elevated); color: var(--text-tertiary); }
+        .on-air-dot {
+          width: 7px; height: 7px; border-radius: var(--radius-full);
+        }
+        .on-air-dot.live { background: var(--error); animation: livePulse 1.5s ease-in-out infinite; }
+        .on-air-dot.off { background: var(--text-tertiary); }
+
+        .listener-count {
+          display: flex; align-items: center; gap: 5px;
+          font-size: 12px; color: var(--text-secondary); font-weight: 600;
+        }
+        .listener-count i { font-size: 11px; color: var(--text-tertiary); }
+
+        /* ========== NOW PLAYING BAR ========== */
+        .now-playing-bar {
+          display: flex; align-items: center; gap: 10px;
+          padding: 8px 16px; background: var(--surface);
+          border-bottom: 1px solid var(--border); flex-shrink: 0;
+        }
+        .npb-thumb {
+          width: 36px; height: 36px; border-radius: 6px; overflow: hidden; flex-shrink: 0;
+        }
+        .npb-thumb img { width: 100%; height: 100%; object-fit: cover; }
+        .npb-info { flex: 1; min-width: 0; }
+        .npb-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .npb-artist { font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .npb-player-btn {
+          width: 34px; height: 34px; border-radius: var(--radius-full);
+          background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+          border: none; color: #fff; font-size: 13px;
+          display: flex; align-items: center; justify-content: center;
+          cursor: pointer; transition: all 0.2s ease; flex-shrink: 0;
+          box-shadow: var(--shadow-soft);
+        }
+        .npb-player-btn:active { transform: scale(0.9); }
+
+        @keyframes livePulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.4; transform: scale(1.5); }
+        }
+
+        /* ========== TAB BAR ========== */
+        .tab-bar {
+          display: flex; gap: 2px;
+          padding: 8px 12px; overflow-x: auto;
+          -webkit-overflow-scrolling: touch; flex-shrink: 0;
+          background: var(--bg); border-bottom: 1px solid var(--border);
+        }
+        .tab-bar::-webkit-scrollbar { display: none; }
+        .tab-btn {
+          display: flex; align-items: center; gap: 6px;
+          padding: 8px 14px; border-radius: 10px;
+          border: none; background: transparent;
+          color: var(--text-tertiary); font-size: 12px; font-weight: 600;
+          cursor: pointer; transition: all 0.2s ease;
+          white-space: nowrap; flex-shrink: 0;
+        }
+        .tab-btn i { font-size: 14px; }
+        .tab-btn:active { transform: scale(0.95); }
+        .tab-btn.active {
+          background: var(--surface-elevated); color: var(--primary);
+          box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+
+        /* ========== SCROLLABLE CONTENT ========== */
+        .content-scroll {
+          flex: 1; overflow-y: auto; overflow-x: hidden;
+          -webkit-overflow-scrolling: touch; padding-bottom: 100px;
+        }
+        .content-scroll::-webkit-scrollbar { display: none; }
+
+        /* ========== OVERVIEW SECTION ========== */
+        .overview-content { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+
+        /* Status Cards Row */
+        .overview-cards-row { display: flex; gap: 12px; }
+        .status-card {
+          flex: 1; background: var(--surface-card); border: 1px solid var(--border);
+          border-radius: var(--radius-lg); padding: 16px;
+          display: flex; flex-direction: column; gap: 12px;
+        }
+        .status-card-header {
+          display: flex; align-items: center; justify-content: space-between;
+        }
+        .status-card-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
+        .status-badge {
+          display: flex; align-items: center; gap: 5px;
+          padding: 3px 10px; border-radius: 20px;
+          font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        .status-badge.live { background: rgba(34,197,94,0.12); color: var(--success); }
+        .status-badge.offline { background: var(--surface-elevated); color: var(--text-tertiary); }
+        .status-dot {
+          width: 6px; height: 6px; border-radius: var(--radius-full);
+          background: var(--success);
+        }
+        .status-dot.pulse { animation: livePulse 1.5s ease-in-out infinite; }
+
+        .status-card-body { display: flex; flex-direction: column; gap: 10px; }
+        .status-card-info { display: flex; flex-direction: column; }
+        .status-card-stat { font-size: 28px; font-weight: 800; line-height: 1; letter-spacing: -0.5px; }
+        .status-card-stat-label { font-size: 12px; color: var(--text-tertiary); font-weight: 500; margin-top: 2px; }
+
+        .broadcast-ctrl-btn {
+          width: 100%; padding: 10px; border-radius: var(--radius-sm);
+          font-size: 13px; font-weight: 700; cursor: pointer; transition: all 0.2s ease;
+          display: flex; align-items: center; justify-content: center; gap: 6px; border: none;
+        }
+        .broadcast-ctrl-btn:active { transform: scale(0.97); }
+        .broadcast-ctrl-btn.stop {
+          background: rgba(239,68,68,0.12); color: var(--error);
+        }
+        .broadcast-ctrl-btn.start {
+          background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+          color: #fff; box-shadow: var(--shadow-soft);
+        }
+
+        /* Now Playing Card */
+        .now-playing-card {
+          background: linear-gradient(135deg, rgba(232,168,56,0.08) 0%, rgba(139,92,246,0.04) 100%);
+          border: 1px solid rgba(232,168,56,0.1);
+          border-radius: var(--radius-lg); padding: 16px;
+          display: flex; align-items: center; gap: 14px;
+        }
+        .now-playing-cover {
+          width: 72px; height: 72px; border-radius: var(--radius-md); overflow: hidden;
+          position: relative; flex-shrink: 0; border: 1px solid var(--border);
+        }
+        .now-playing-cover img { width: 100%; height: 100%; object-fit: cover; }
+        .now-playing-equalizer {
+          position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%);
+          display: flex; gap: 2px; align-items: flex-end; height: 16px;
+        }
+        .now-playing-equalizer span {
+          width: 3px; background: var(--primary); border-radius: 2px;
+          animation: equalizer 0.8s ease-in-out infinite alternate;
+        }
+        .now-playing-equalizer span:nth-child(1) { height: 8px; animation-delay: 0s; }
+        .now-playing-equalizer span:nth-child(2) { height: 14px; animation-delay: 0.2s; }
+        .now-playing-equalizer span:nth-child(3) { height: 10px; animation-delay: 0.4s; }
+        .now-playing-equalizer span:nth-child(4) { height: 6px; animation-delay: 0.6s; }
+
+        @keyframes equalizer {
+          0% { height: 4px; }
+          100% { height: 16px; }
+        }
+
+        .now-playing-info { flex: 1; min-width: 0; }
+        .now-playing-title { font-size: 15px; font-weight: 700; line-height: 1.3; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .now-playing-artist { font-size: 13px; color: var(--text-secondary); margin-bottom: 8px; }
+
+        .now-playing-progress { display: flex; flex-direction: column; gap: 4px; }
+        .progress-bar {
+          width: 100%; height: 4px; background: var(--surface-card);
+          border-radius: 2px; overflow: hidden;
+        }
+        .progress-fill {
+          height: 100%; background: linear-gradient(90deg, var(--gradient-start), var(--gradient-end));
+          border-radius: 2px; transition: width 0.3s ease;
+        }
+        .progress-time { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-tertiary); }
+
+        .mini-player-btn {
+          width: 42px; height: 42px; border-radius: var(--radius-full);
+          background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+          border: none; color: #fff; font-size: 16px; box-shadow: var(--shadow-soft);
+          display: flex; align-items: center; justify-content: center;
+          cursor: pointer; transition: all 0.2s ease; flex-shrink: 0;
+        }
+        .mini-player-btn:active { transform: scale(0.9); }
+
+        /* Section Block */
+        .section-block { display: flex; flex-direction: column; }
+        .section-block-header {
+          display: flex; align-items: center; justify-content: space-between;
+          margin-bottom: 12px;
+        }
+        .section-block-header h3 { font-size: 16px; font-weight: 700; }
+        .section-block-count { font-size: 12px; color: var(--text-tertiary); font-weight: 500; }
+        .section-block-count strong { color: var(--text-primary); }
+
+        /* History List */
+        .history-list {
+          background: var(--surface-card); border: 1px solid var(--border);
+          border-radius: var(--radius-lg); overflow: hidden;
+        }
+        .history-item {
+          display: flex; align-items: center; gap: 12px;
+          padding: 12px 14px; border-bottom: 1px solid var(--border);
+          transition: background 0.2s ease;
+        }
+        .history-item:last-child { border-bottom: none; }
+        .history-item:active { background: var(--surface-elevated); }
+        .history-cover {
+          width: 36px; height: 36px; border-radius: 6px; object-fit: cover; flex-shrink: 0;
+        }
+        .history-info { flex: 1; min-width: 0; }
+        .history-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .history-artist { font-size: 12px; color: var(--text-secondary); }
+        .history-time { font-size: 11px; color: var(--text-tertiary); flex-shrink: 0; }
+
+        /* Quick Actions Row */
+        .quick-actions-row {
+          display: flex; gap: 10px;
+        }
+        .quick-action-btn {
+          flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8px;
+          padding: 16px 8px; background: var(--surface-card); border: 1px solid var(--border);
+          border-radius: var(--radius-md); cursor: pointer; transition: all 0.2s ease;
+        }
+        .quick-action-btn:active { background: var(--surface-elevated); transform: scale(0.96); }
+        .quick-action-btn span { font-size: 11px; font-weight: 600; color: var(--text-secondary); text-align: center; }
+        .qab-icon {
+          width: 44px; height: 44px; border-radius: var(--radius-sm);
+          display: flex; align-items: center; justify-content: center; font-size: 18px;
+        }
+        .qab-icon.gold { background: rgba(232,168,56,0.12); color: var(--primary); }
+        .qab-icon.blue { background: rgba(59,130,246,0.12); color: var(--gradient-blue); }
+        .qab-icon.purple { background: rgba(139,92,246,0.12); color: var(--gradient-purple); }
+
+        /* Sparkline Chart */
+        .sparkline-chart {
+          display: flex; align-items: flex-end; gap: 4px;
+          height: 120px; background: var(--surface-card);
+          border: 1px solid var(--border); border-radius: var(--radius-lg);
+          padding: 16px 12px 8px;
+        }
+        .sparkline-bar {
+          flex: 1; display: flex; align-items: flex-end;
+          height: 100%; cursor: pointer; position: relative;
+        }
+        .sparkline-fill {
+          width: 100%; border-radius: 3px 3px 0 0;
+          background: linear-gradient(to top, rgba(232,168,56,0.3), var(--primary));
+          transition: height 0.3s ease; min-height: 2px;
+        }
+        .sparkline-labels {
+          display: flex; justify-content: space-between;
+          padding: 6px 12px 0;
+        }
+        .sparkline-labels span { font-size: 10px; color: var(--text-tertiary); font-weight: 500; }
+
+        /* ========== PLAY CONTROL (integrated in Overview) ========== */
+        .ov-pc-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+        .ov-pc-dot.green { background: var(--success); }
+        .ov-pc-dot.gray { background: var(--text-tertiary); }
+        .ov-pc-mode-row { display: flex; gap: 6px; margin-bottom: 10px; }
+        .ov-pc-mode-btn {
+          flex: 1; padding: 8px 6px; border-radius: var(--radius-sm); border: none;
+          background: var(--surface-elevated); color: var(--text-secondary);
+          font-size: 11px; font-weight: 600; cursor: pointer;
+          display: flex; align-items: center; justify-content: center; gap: 5px;
+          transition: all 0.2s ease;
+        }
+        .ov-pc-mode-btn i { font-size: 12px; }
+        .ov-pc-mode-btn.active { background: var(--primary); color: white; }
+        .ov-pc-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+        .ov-pc-item {
+          display: flex; align-items: center; justify-content: space-between;
+          background: var(--surface-card); border: 1px solid var(--border);
+          border-radius: var(--radius-sm); padding: 10px 12px;
+        }
+        .ov-pc-item-info { flex: 1; min-width: 0; }
+        .ov-pc-item-name { font-size: 13px; font-weight: 600; }
+        .ov-pc-item-sub { font-size: 11px; color: var(--text-tertiary); margin-top: 1px; }
+        .ov-pc-play-btn {
+          width: 32px; height: 32px; border-radius: 50%; border: none;
+          display: flex; align-items: center; justify-content: center;
+          cursor: pointer; transition: all 0.2s ease; flex-shrink: 0;
+          background: var(--primary); color: white; font-size: 12px;
+        }
+        .ov-pc-play-btn.active { background: rgba(74,222,128,0.15); color: var(--success); }
+        .ov-pc-play-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .ov-pc-active {
+          display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
+          color: var(--success); padding: 8px 0 4px;
+        }
+        .ov-pc-now-playing {
+          display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
+          color: var(--success); padding: 6px 0; margin-bottom: 2px;
+        }
+        .ov-pc-empty { font-size: 12px; color: var(--text-tertiary); padding: 12px 0; text-align: center; }
+        .ov-pc-queue-header {
+          display: flex; align-items: center; justify-content: space-between;
+          font-size: 12px; font-weight: 700; color: var(--text-secondary);
+          text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px;
+        }
+        .ov-pc-queue-count { font-size: 10px; color: var(--text-tertiary); font-weight: 600; text-transform: none; }
+        .ov-pc-queue { background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+        .ov-pc-q-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+        .ov-pc-q-item:last-child { border-bottom: none; }
+        .ov-pc-q-num {
+          width: 18px; height: 18px; border-radius: 50%; background: var(--surface-elevated);
+          display: flex; align-items: center; justify-content: center;
+          font-size: 9px; font-weight: 700; color: var(--text-tertiary); flex-shrink: 0;
+        }
+        .ov-pc-q-info { flex: 1; min-width: 0; }
+        .ov-pc-q-title { font-size: 12px; font-weight: 600; }
+        .ov-pc-q-artist { font-size: 10px; color: var(--text-tertiary); }
+
+        /* ========== MEDIA LIBRARY SECTION ========== */
+        .media-content { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+
+        .upload-zone {
+          display: flex; flex-direction: column; align-items: center; gap: 10px;
+          padding: 28px 20px; background: var(--surface-card);
+          border: 2px dashed var(--border); border-radius: var(--radius-lg);
+          cursor: pointer; transition: all 0.25s ease; text-align: center;
+        }
+        .upload-zone:active { background: var(--surface-elevated); border-color: var(--primary); }
+        .upload-zone.dragging {
+          background: rgba(232,168,56,0.06); border-color: var(--primary);
+          transform: scale(1.01);
+        }
+        .upload-zone i { font-size: 36px; color: var(--text-tertiary); transition: all 0.25s ease; }
+        .upload-zone.dragging i { color: var(--primary); transform: translateY(-4px); }
+        .upload-zone-text h4 { font-size: 15px; font-weight: 600; margin-bottom: 2px; }
+        .upload-zone-text p { font-size: 13px; color: var(--text-tertiary); }
+
+        /* Upload Progress */
+        .upload-progress-list { display: flex; flex-direction: column; gap: 10px; }
+        .upload-progress-item {
+          background: var(--surface-card); border: 1px solid var(--border);
+          border-radius: var(--radius-md); padding: 12px 14px;
+          animation: fadeSlideUp 0.25s ease;
+        }
+        .upload-progress-info {
+          display: flex; align-items: center; justify-content: space-between;
+          margin-bottom: 8px;
+        }
+        .upload-progress-name {
+          font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px;
+        }
+        .upload-progress-name i { color: var(--primary); font-size: 14px; }
+        .upload-progress-pct { font-size: 12px; font-weight: 700; color: var(--primary); font-variant-numeric: tabular-nums; }
+        .upload-progress-bar {
+          width: 100%; height: 4px; background: var(--surface-elevated);
+          border-radius: 2px; overflow: hidden;
+        }
+        .upload-progress-fill {
+          height: 100%; background: linear-gradient(90deg, var(--gradient-start), var(--gradient-end));
+          border-radius: 2px; transition: width 0.3s ease;
+        }
+
+        /* Media Toolbar */
+        .media-toolbar { display: flex; flex-direction: column; gap: 10px; }
+        .media-search-wrapper {
+          position: relative; display: flex; align-items: center;
+        }
+        .media-search-wrapper > i {
+          position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+          color: var(--text-tertiary); font-size: 15px; pointer-events: none;
+        }
+        .media-search-input {
+          width: 100%; padding: 12px 40px 12px 42px;
+          background: var(--surface-card); border: 1.5px solid var(--border);
+          border-radius: var(--radius-md); color: var(--text-primary);
+          font-size: 14px; font-weight: 500; outline: none;
+        }
+        .media-search-input:focus { border-color: var(--primary); box-shadow: 0 0 0 4px rgba(232,168,56,0.08); }
+        .media-search-input::placeholder { color: var(--text-tertiary); font-weight: 400; }
+        .media-search-clear {
+          position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+          width: 28px; height: 28px; border-radius: var(--radius-full);
+          background: var(--surface-elevated); border: none;
+          color: var(--text-secondary); font-size: 12px;
+          display: flex; align-items: center; justify-content: center;
+          cursor: pointer;
+        }
+        .media-search-clear:active { background: var(--surface-hover); }
+
+        .media-filter-select {
+          width: 100%; padding: 12px 16px;
+          background: var(--surface-card); border: 1.5px solid var(--border);
+          border-radius: var(--radius-md); color: var(--text-primary);
+          font-size: 13px; font-weight: 500; outline: none;
+          appearance: none; -webkit-appearance: none;
+          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%236B6B6B' viewBox='0 0 16 16'%3E%3Cpath d='M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z'/%3E%3C/svg%3E");
+          background-repeat: no-repeat; background-position: right 14px center; padding-right: 40px;
+        }
+        .media-filter-select:focus { border-color: var(--primary); box-shadow: 0 0 0 4px rgba(232,168,56,0.08); }
+
+        /* Bulk Actions */
+        .media-bulk-bar {
+          display: flex; align-items: center; gap: 10px;
+          padding: 10px 14px; background: rgba(232,168,56,0.08);
+          border: 1px solid rgba(232,168,56,0.15);
+          border-radius: var(--radius-md);
+          animation: fadeSlideUp 0.2s ease;
+        }
+        .media-bulk-count { font-size: 13px; font-weight: 700; color: var(--primary); flex-shrink: 0; }
+        .media-bulk-actions { display: flex; gap: 8px; flex: 1; justify-content: flex-end; }
+        .media-bulk-btn {
+          padding: 8px 12px; border-radius: var(--radius-sm);
+          font-size: 12px; font-weight: 600; cursor: pointer;
+          border: none; display: flex; align-items: center; gap: 5px;
+          background: var(--surface-elevated); color: var(--text-primary);
+          transition: all 0.2s ease;
+        }
+        .media-bulk-btn:active { transform: scale(0.95); }
+        .media-bulk-btn.danger { background: rgba(239,68,68,0.12); color: var(--error); }
+        .media-bulk-clear {
+          width: 28px; height: 28px; border-radius: var(--radius-full);
+          background: none; border: none; color: var(--text-tertiary);
+          cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center;
+        }
+        .media-bulk-clear:active { background: var(--surface-elevated); }
+
+        /* File Count */
+        .media-count { font-size: 12px; color: var(--text-tertiary); font-weight: 500; text-align: right; }
+
+        /* File List */
+        .media-file-list {
+          background: var(--surface-card); border: 1px solid var(--border);
+          border-radius: var(--radius-lg); overflow: hidden;
+        }
+        .media-empty {
+          display: flex; flex-direction: column; align-items: center; gap: 8px;
+          padding: 40px 20px; text-align: center;
+        }
+        .media-empty i { font-size: 32px; color: var(--text-tertiary); }
+        .media-empty p { font-size: 14px; color: var(--text-secondary); }
+
+        .media-file-item {
+          display: flex; align-items: flex-start; gap: 12px;
+          padding: 14px; border-bottom: 1px solid var(--border);
+          transition: background 0.2s ease; position: relative;
+        }
+        .media-file-item:last-child { border-bottom: none; }
+        .media-file-item.selected { background: rgba(232,168,56,0.04); }
+
+        .media-checkbox {
+          width: 22px; height: 22px; border-radius: 6px;
+          border: 2px solid var(--border); flex-shrink: 0;
+          margin-top: 6px; cursor: pointer; transition: all 0.2s ease;
+          display: flex; align-items: center; justify-content: center;
+        }
+        .media-checkbox.checked {
+          background: var(--primary); border-color: var(--primary);
+        }
+        .media-checkbox i { font-size: 11px; color: #fff; }
+
+        .media-file-cover {
+          width: 44px; height: 44px; border-radius: 8px; overflow: hidden;
+          flex-shrink: 0; border: 1px solid var(--border);
+        }
+        .media-file-cover img { width: 100%; height: 100%; object-fit: cover; }
+
+        .media-file-info { flex: 1; min-width: 0; }
+        .media-file-title { font-size: 14px; font-weight: 600; line-height: 1.3; margin-bottom: 2px; }
+        .media-file-artist { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+        .media-file-tags {
+          display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 4px;
+        }
+        .media-file-tag {
+          padding: 2px 8px; border-radius: 4px;
+          font-size: 10px; font-weight: 600; color: var(--text-tertiary);
+          background: var(--surface-elevated);
+        }
+        .media-file-playlists {
+          display: flex; gap: 4px; flex-wrap: wrap;
+        }
+        .media-playlist-chip {
+          padding: 2px 8px; border-radius: 4px;
+          font-size: 10px; font-weight: 600;
+          background: rgba(232,168,56,0.1); color: var(--primary);
+        }
+
+        /* File Menu */
+        .media-file-actions-relative { position: relative; }
+        .media-file-menu {
+          width: 32px; height: 32px; border-radius: var(--radius-full);
+          background: none; border: none; color: var(--text-tertiary);
+          font-size: 16px; cursor: pointer; display: flex;
+          align-items: center; justify-content: center; flex-shrink: 0;
+        }
+        .media-file-menu:active { background: var(--surface-elevated); color: var(--text-primary); }
+
+        /* Action Sheet */
+        .media-actions-overlay {
+          position: fixed; inset: 0; z-index: 9999;
+        }
+        .media-actions-sheet {
+          z-index: 10000;
+          width: 240px; background: var(--surface-elevated);
+          border: 1px solid var(--border); border-radius: var(--radius-md);
+          padding: 8px; box-shadow: var(--shadow-elevated);
+          animation: fadeSlideUp 0.15s ease;
+        }
+        .media-action-btn {
+          display: flex; align-items: center; gap: 10px;
+          padding: 10px 8px; border-radius: 8px;
+          background: none; border: none; color: var(--text-primary);
+          width: 100%; text-align: left; cursor: pointer;
+          transition: background 0.2s ease;
+        }
+        .media-action-btn:active { background: var(--surface-hover); }
+        .media-action-icon {
+          width: 34px; height: 34px; border-radius: 8px;
+          display: flex; align-items: center; justify-content: center;
+          font-size: 15px; flex-shrink: 0;
+        }
+        .media-action-icon.blue { background: rgba(59,130,246,0.12); color: var(--gradient-blue); }
+        .media-action-icon.gold { background: rgba(232,168,56,0.12); color: var(--primary); }
+        .media-action-icon.red { background: rgba(239,68,68,0.12); color: var(--error); }
+        .media-action-info { flex: 1; }
+        .media-action-info h4 { font-size: 14px; font-weight: 600; }
+        .media-action-info p { font-size: 11px; color: var(--text-secondary); margin-top: 1px; }
+
+        /* Inline Edit Fields */
+        .media-edit-fields { display: flex; flex-direction: column; gap: 6px; }
+        .media-edit-input {
+          padding: 8px 10px; border-radius: 6px;
+          background: var(--surface-elevated); border: 1.5px solid var(--border);
+          color: var(--text-primary); font-size: 13px; font-weight: 500;
+          outline: none; width: 100%;
+        }
+        .media-edit-input:focus { border-color: var(--primary); }
+        .media-edit-input::placeholder { color: var(--text-tertiary); }
+        .media-edit-actions {
+          display: flex; gap: 6px; margin-top: 2px;
+        }
+        .media-edit-save, .media-edit-cancel {
+          padding: 6px 12px; border-radius: 6px;
+          font-size: 12px; font-weight: 600; cursor: pointer;
+          border: none; transition: all 0.2s ease;
+        }
+        .media-edit-save {
+          background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+          color: #fff;
+        }
+        .media-edit-save:active { transform: scale(0.95); }
+        .media-edit-cancel {
+          background: var(--surface-elevated); color: var(--text-secondary);
+        }
+        .media-edit-cancel:active { transform: scale(0.95); }
+
+        /* Playlist Picker Modal */
+        .media-modal-overlay {
+          position: fixed; inset: 0; background: var(--overlay);
+          z-index: 9000; animation: fadeSlideUp 0.2s ease;
+        }
+        .media-modal-sheet {
+          position: fixed; bottom: 0; left: 0; right: 0; z-index: 9001;
+          max-width: 480px; margin: 0 auto;
+          background: var(--surface);
+          border-radius: 28px 28px 0 0;
+          animation: slideUp 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+          max-height: 80vh; display: flex; flex-direction: column;
+        }
+        @keyframes slideUp {
+          from { transform: translateY(100%); }
+          to { transform: translateY(0); }
+        }
+        .media-modal-handle {
+          width: 40px; height: 5px; background: var(--text-tertiary);
+          border-radius: 3px; margin: 12px auto 8px; opacity: 0.5;
+        }
+        .media-modal-header {
+          padding: 8px 24px 16px; text-align: center;
+        }
+        .media-modal-header h2 { font-size: 20px; font-weight: 700; }
+        .media-modal-header p { font-size: 13px; color: var(--text-secondary); margin-top: 4px; }
+        .media-modal-body {
+          flex: 1; overflow-y: auto; padding: 0 24px 20px;
+          -webkit-overflow-scrolling: touch;
+        }
+        .media-modal-body::-webkit-scrollbar { display: none; }
+
+        .media-pl-item {
+          display: flex; align-items: center; gap: 14px;
+          padding: 14px 0; border-bottom: 1px solid var(--border);
+          cursor: pointer; transition: opacity 0.2s ease;
+        }
+        .media-pl-item:last-child { border-bottom: none; }
+        .media-pl-item:active { opacity: 0.6; }
+        .media-pl-icon {
+          width: 40px; height: 40px; border-radius: var(--radius-sm);
+          background: rgba(232,168,56,0.1); color: var(--primary);
+          display: flex; align-items: center; justify-content: center;
+          font-size: 18px; flex-shrink: 0;
+        }
+        .media-pl-info { flex: 1; }
+        .media-pl-name { font-size: 15px; font-weight: 600; }
+        .media-pl-arrow { font-size: 14px; color: var(--text-tertiary); }
+
+        /* ========== PLACEHOLDER SECTION ========== */
+        .placeholder-section {
+          display: flex; flex-direction: column; align-items: center; justify-content: center;
+          padding: 60px 40px; text-align: center; gap: 12px;
+        }
+        .placeholder-icon {
+          width: 64px; height: 64px; border-radius: var(--radius-full);
+          background: var(--surface-elevated); display: flex; align-items: center; justify-content: center;
+          font-size: 24px; color: var(--text-tertiary);
+        }
+        .placeholder-section h2 { font-size: 20px; font-weight: 700; }
+        .placeholder-section p { font-size: 14px; color: var(--text-secondary); line-height: 1.6; max-width: 280px; }
+
+        /* ========== BOTTOM NAV ========== */
+        .bottom-nav {
+          position: fixed; bottom: 0; left: 0; right: 0;
+          background: rgba(15,15,15,0.92);
+          backdrop-filter: blur(20px) saturate(180%);
+          -webkit-backdrop-filter: blur(20px) saturate(180%);
+          border-top: 1px solid var(--border);
+          padding: 8px 0 calc(8px + env(safe-area-inset-bottom, 0px));
+          z-index: 1000; display: flex; justify-content: space-around; align-items: center;
+        }
+        @media (min-width: 480px) {
+          .bottom-nav { max-width: 480px; margin: 0 auto; }
+        }
+        .nav-item {
+          display: flex; flex-direction: column; align-items: center; gap: 4px;
+          padding: 6px 12px; background: none; border: none;
+          color: var(--text-tertiary); cursor: pointer; transition: all 0.2s ease; position: relative;
+        }
+        .nav-item.active { color: var(--primary); }
+        .nav-item i { font-size: 20px; transition: transform 0.2s ease; }
+        .nav-item:active i { transform: scale(0.85); }
+        .nav-item span { font-size: 10px; font-weight: 600; }
+        .nav-item .nav-badge {
+          position: absolute; top: 2px; right: 6px; width: 8px; height: 8px;
+          background: var(--error); border-radius: var(--radius-full); border: 2px solid var(--bg);
+        }
+        /* ========== PLAYLISTS SECTION ========== */
+        .pl-content { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+        .pl-toolbar { display: flex; gap: 10px; align-items: center; }
+        .pl-search-wrapper { position: relative; flex: 1; }
+        .pl-search-wrapper > i { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-tertiary); font-size: 14px; pointer-events: none; }
+        .pl-search-input { width: 100%; padding: 10px 12px 10px 36px; background: var(--surface-card); border: 1.5px solid var(--border); border-radius: var(--radius-md); color: var(--text-primary); font-size: 13px; font-weight: 500; outline: none; }
+        .pl-search-input:focus { border-color: var(--primary); }
+        .pl-picker-toolbar { position: relative; margin: 0 20px 8px; }
+        .pl-picker-toolbar > i { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-tertiary); font-size: 14px; pointer-events: none; }
+        .pl-picker-search { width: 100%; padding: 10px 12px 10px 36px; background: var(--surface-elevated); border: 1.5px solid var(--border); border-radius: var(--radius-md); color: var(--text-primary); font-size: 13px; outline: none; box-sizing: border-box; }
+        .pl-picker-search:focus { border-color: var(--primary); }
+        .pl-create-btn { display: flex; align-items: center; gap: 6px; padding: 10px 16px; background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end)); border: none; border-radius: var(--radius-md); color: #fff; font-size: 13px; font-weight: 700; cursor: pointer; transition: all 0.2s ease; white-space: nowrap; box-shadow: var(--shadow-soft); }
+        .pl-create-btn:active { transform: scale(0.95); }
+        .pl-refresh-btn { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; background: var(--surface-card); border: 1.5px solid var(--border); border-radius: var(--radius-md); color: var(--text-secondary); font-size: 15px; cursor: pointer; transition: all 0.2s ease; flex-shrink: 0; }
+        .pl-refresh-btn:hover { border-color: var(--primary); color: var(--primary); }
+        .pl-refresh-btn:active { transform: scale(0.92); }
+        .pl-count { font-size: 12px; color: var(--text-tertiary); font-weight: 500; text-align: right; }
+        .pl-create-form, .dj-form, .wh-form { background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px; display: flex; flex-direction: column; gap: 14px; animation: fadeSlideUp 0.25s ease; }
+        .pl-create-form h4, .dj-form h4, .wh-form h4 { font-size: 16px; font-weight: 700; }
+        .pl-form-row { display: flex; flex-direction: column; gap: 6px; }
+        .pl-form-row label { font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
+        .pl-form-input { padding: 11px 14px; background: var(--surface-elevated); border: 1.5px solid var(--border); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 14px; font-weight: 500; outline: none; color-scheme: dark; }
+        .pl-form-input:focus { border-color: var(--primary); }
+        .pl-form-input[type="time"]::-webkit-calendar-picker-indicator { filter: invert(0.7); cursor: pointer; }
+        .pl-form-input[type="time"]::-webkit-datetime-edit { color: var(--text-primary); }
+        .pl-form-select { padding: 11px 14px; background: var(--surface-elevated); border: 1.5px solid var(--border); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 14px; font-weight: 500; outline: none; appearance: none; -webkit-appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='%236B6B6B' viewBox='0 0 16 16'%3E%3Cpath d='M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 36px; }
+        .pl-form-select:focus { border-color: var(--primary); }
+        .pl-form-range { width: 100%; height: 6px; -webkit-appearance: none; appearance: none; background: var(--surface-elevated); border-radius: 3px; outline: none; }
+        .pl-form-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 20px; height: 20px; border-radius: 50%; background: var(--primary); cursor: pointer; box-shadow: var(--shadow-soft); }
+        .pl-form-actions { display: flex; gap: 8px; margin-top: 4px; }
+        .pl-form-save { padding: 10px 20px; background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end)); border: none; border-radius: var(--radius-sm); color: #fff; font-size: 13px; font-weight: 700; cursor: pointer; transition: all 0.2s ease; }
+        .pl-form-save:active { transform: scale(0.95); }
+        .pl-form-cancel { padding: 10px 20px; background: var(--surface-elevated); border: none; border-radius: var(--radius-sm); color: var(--text-secondary); font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s ease; }
+        .pl-form-cancel:active { transform: scale(0.95); }
+        .pl-schedule-config { background: var(--surface-elevated); border-radius: var(--radius-md); padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+        .pl-day-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+        .pl-day-chip { padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 600; border: 1.5px solid var(--border); background: transparent; color: var(--text-secondary); cursor: pointer; transition: all 0.2s ease; }
+        .pl-day-chip:active { transform: scale(0.95); }
+        .pl-day-chip.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+        .pl-time-row { display: flex; gap: 12px; }
+        .pl-time-row > div { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+        .pl-time-row label { font-size: 11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; }
+        .pl-list { display: flex; flex-direction: column; gap: 8px; }
+        .pl-card { background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; transition: all 0.2s ease; }
+        .pl-card.expanded { border-color: rgba(232,168,56,0.2); }
+        .pl-card-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; cursor: pointer; transition: background 0.2s ease; }
+        .pl-card-header:active { background: var(--surface-hover); }
+        .pl-card-left { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
+        .pl-type-badge { padding: 3px 10px; border-radius: 6px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0; }
+        .pl-type-badge.standard { background: rgba(59,130,246,0.12); color: #3B82F6; }
+        .pl-type-badge.scheduled { background: rgba(232,168,56,0.12); color: var(--primary); }
+        .pl-type-badge.ondemand { background: rgba(139,92,246,0.12); color: #8B5CF6; }
+        .pl-card-info { min-width: 0; }
+        .pl-card-name { font-size: 15px; font-weight: 600; }
+        .pl-card-meta { font-size: 12px; color: var(--text-tertiary); margin-top: 2px; }
+        .pl-card-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+        .pl-card-delete { width: 30px; height: 30px; border-radius: 50%; background: none; border: none; color: var(--text-tertiary); font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+        .pl-card-delete:active { background: rgba(239,68,68,0.1); color: var(--error); }
+        .pl-chevron { font-size: 14px; color: var(--text-tertiary); transition: transform 0.25s ease; }
+        .pl-chevron.open { transform: rotate(180deg); color: var(--primary); }
+        .pl-toggle { position: relative; display: inline-block; width: 42px; height: 24px; cursor: pointer; }
+        .pl-toggle input { display: none; }
+        .pl-toggle-slider { position: absolute; inset: 0; background: var(--surface-elevated); border-radius: 12px; transition: all 0.25s ease; }
+        .pl-toggle-slider::before { content: ''; position: absolute; left: 3px; top: 3px; width: 18px; height: 18px; background: var(--text-tertiary); border-radius: 50%; transition: all 0.25s ease; }
+        .pl-toggle input:checked + .pl-toggle-slider { background: var(--primary); }
+        .pl-toggle input:checked + .pl-toggle-slider::before { background: #fff; transform: translateX(18px); }
+        .pl-song-list { border-top: 1px solid var(--border); padding: 10px 16px 14px; display: flex; flex-direction: column; gap: 6px; }
+        .pl-empty-songs { text-align: center; padding: 20px; color: var(--text-tertiary); font-size: 13px; }
+        .pl-song-item { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+        .pl-song-idx { width: 20px; text-align: center; font-size: 12px; color: var(--text-tertiary); font-weight: 600; }
+        .pl-song-cover { width: 32px; height: 32px; border-radius: 6px; object-fit: cover; flex-shrink: 0; border: 1px solid var(--border); }
+        .pl-song-info { flex: 1; min-width: 0; }
+        .pl-song-title { font-size: 13px; font-weight: 600; }
+        .pl-song-artist { font-size: 11px; color: var(--text-secondary); }
+        .pl-song-remove { width: 28px; height: 28px; border-radius: 50%; background: none; border: none; color: var(--text-tertiary); cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; }
+        .pl-song-remove:active { background: rgba(239,68,68,0.1); color: var(--error); }
+        .pl-add-songs-btn { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px; border: 1.5px dashed var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--primary); font-size: 13px; font-weight: 600; cursor: pointer; margin-top: 4px; transition: all 0.2s ease; }
+        .pl-add-songs-btn:active { background: rgba(232,168,56,0.05); border-color: var(--primary); }
+        .pl-schedule-info { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: rgba(232,168,56,0.06); border-radius: var(--radius-sm); margin-top: 6px; font-size: 12px; color: var(--primary); }
+        .pl-schedule-info i { font-size: 14px; }
+        .pl-schedule-time { margin-left: auto; font-weight: 600; }
+        .pl-picker-item { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); cursor: pointer; transition: opacity 0.2s ease; }
+        .pl-picker-item:last-child { border-bottom: none; }
+        .pl-picker-item.disabled { opacity: 0.4; cursor: default; }
+        .pl-picker-item:not(.disabled):active { opacity: 0.6; }
+        .pl-picker-cover { width: 36px; height: 36px; border-radius: 6px; object-fit: cover; border: 1px solid var(--border); }
+        .pl-picker-info { flex: 1; min-width: 0; }
+        .pl-picker-title { font-size: 14px; font-weight: 600; }
+        .pl-picker-artist { font-size: 12px; color: var(--text-secondary); }
+        .pl-picker-add { color: var(--primary); font-size: 20px; }
+        .pl-picker-checked { color: var(--success); font-size: 18px; }
+
+        /* ========== NEW PLAYLISTS SECTION ========== */
+        .pl-content-new { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+        .pl-new-header { display: flex; align-items: center; justify-content: space-between; }
+        .pl-new-heading { font-size: 22px; font-weight: 800; }
+        .pl-filter-tabs { display: flex; gap: 6px; align-items: center; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        .pl-filter-tabs::-webkit-scrollbar { display: none; }
+        .pl-filter-tab { display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; border: none; background: transparent; color: var(--text-secondary); cursor: pointer; white-space: nowrap; transition: all 0.2s ease; }
+        .pl-filter-tab:active { transform: scale(0.95); }
+        .pl-filter-tab.active { background: var(--surface-card); border: 1px solid var(--border); color: var(--text-primary); }
+        .pl-filter-count { padding: 1px 7px; border-radius: 8px; font-size: 11px; font-weight: 700; background: var(--surface-elevated); color: var(--text-tertiary); }
+        .pl-two-panel { display: flex; gap: 14px; min-height: 400px; }
+        .pl-left-panel { flex: 1; min-width: 0; }
+        .pl-left-compact { max-width: 400px; }
+        .pl-right-panel { flex: 1; min-width: 0; background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px; display: flex; flex-direction: column; gap: 18px; align-self: flex-start; }
+        .pl-card-list { display: flex; flex-direction: column; gap: 6px; }
+        .pl-card-new { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-lg); cursor: pointer; transition: all 0.2s ease; position: relative; }
+        .pl-card-new:active { transform: scale(0.98); }
+        .pl-card-new.selected { border-color: var(--primary); border-left: 3px solid var(--primary); padding-left: 12px; }
+        .pl-card-new.now-playing { border-left: 3px solid var(--success); padding-left: 12px; }
+        .pl-card-new.default { background: rgba(232,168,56,0.03); }
+        .pl-card-status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; margin-top: 5px; }
+        .pl-card-status-dot.active { background: var(--success); box-shadow: 0 0 6px var(--success); animation: livePulse 1.5s ease-in-out infinite; }
+        .pl-card-status-dot.scheduled { background: var(--primary); }
+        .pl-card-status-dot.general { background: var(--text-tertiary); }
+        .pl-card-status-dot.disabled { background: var(--error); opacity: 0.5; }
+        .pl-card-new-body { flex: 1; min-width: 0; }
+        .pl-card-new-top { display: flex; align-items: center; gap: 8px; }
+        .pl-card-new-name { font-size: 15px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .pl-card-new-meta { font-size: 12px; color: var(--text-tertiary); margin-top: 3px; }
+        .pl-card-new-tag { display: inline-flex; align-items: center; gap: 4px; margin-top: 6px; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; background: rgba(232,168,56,0.08); color: var(--primary); }
+        .pl-card-new-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+        .pl-card-edit-btn { width: 30px; height: 30px; border-radius: 50%; background: none; border: none; color: var(--text-tertiary); font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+        .pl-card-edit-btn:active { background: var(--surface-elevated); color: var(--text-primary); }
+        .pl-card-menu-wrapper { position: relative; }
+        .pl-card-menu-btn { width: 30px; height: 30px; border-radius: 50%; background: none; border: none; color: var(--text-tertiary); font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+        .pl-card-menu-btn:active { background: var(--surface-elevated); }
+        .pl-menu-overlay { position: fixed; inset: 0; z-index: 100; }
+        .pl-menu-dropdown { position: absolute; top: 100%; right: 0; margin-top: 4px; background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); z-index: 101; min-width: 140px; overflow: hidden; }
+        .pl-menu-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 14px; font-size: 13px; font-weight: 500; border: none; background: none; color: var(--text-primary); cursor: pointer; text-align: left; }
+        .pl-menu-item:active { background: var(--surface-hover); }
+        .pl-menu-item.danger { color: var(--error); }
+        .pl-card-now-playing-badge { position: absolute; top: -1px; right: -1px; padding: 2px 8px; font-size: 10px; font-weight: 700; background: var(--success); color: #fff; border-radius: 0 var(--radius-lg) 0 6px; }
+        .pl-detail-header { display: flex; align-items: center; gap: 10px; }
+        .pl-detail-back { width: 32px; height: 32px; border-radius: 50%; border: none; background: var(--surface-elevated); color: var(--text-secondary); font-size: 14px; cursor: pointer; display: none; align-items: center; justify-content: center; }
+        .pl-detail-back:active { transform: scale(0.92); }
+        .pl-detail-header-info { flex: 1; display: flex; align-items: center; gap: 8px; }
+        .pl-detail-name { font-size: 20px; font-weight: 700; }
+        .pl-detail-header-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+        .pl-detail-edit-btn { display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 600; border: 1px solid var(--border); background: transparent; color: var(--text-secondary); cursor: pointer; }
+        .pl-detail-edit-btn:active { background: var(--surface-elevated); }
+        .pl-detail-schedule { background: rgba(232,168,56,0.04); border: 1px solid rgba(232,168,56,0.1); border-radius: var(--radius-md); padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+        .pl-detail-section-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
+        .pl-detail-schedule-body { display: flex; flex-direction: column; gap: 8px; }
+        .pl-detail-days { display: flex; gap: 4px; flex-wrap: wrap; }
+        .pl-detail-day-pill { padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; background: var(--surface-elevated); color: var(--text-tertiary); }
+        .pl-detail-day-pill.active { background: var(--primary); color: #fff; }
+        .pl-detail-time { font-size: 14px; font-weight: 700; color: var(--text-primary); }
+        .pl-detail-next-run { font-size: 12px; color: var(--text-tertiary); display: flex; align-items: center; gap: 6px; }
+        .pl-detail-songs { display: flex; flex-direction: column; gap: 10px; }
+        .pl-detail-songs-header { display: flex; align-items: center; justify-content: space-between; }
+        .pl-detail-add-songs-btn { display: flex; align-items: center; gap: 4px; padding: 8px 14px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 600; border: 1.5px dashed var(--border); background: transparent; color: var(--primary); cursor: pointer; }
+        .pl-detail-add-songs-btn:active { border-color: var(--primary); background: rgba(232,168,56,0.03); }
+        .pl-detail-empty-songs { text-align: center; padding: 30px 0; color: var(--text-tertiary); }
+        .pl-detail-empty-songs i { font-size: 32px; opacity: 0.4; margin-bottom: 8px; display: block; }
+        .pl-detail-empty-songs p { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+        .pl-detail-empty-songs span { font-size: 13px; }
+        .pl-detail-song-list { display: flex; flex-direction: column; gap: 4px; }
+        .pl-detail-song-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius-sm); transition: background 0.15s ease; }
+        .pl-detail-song-item:active { background: var(--surface-hover); }
+        .pl-detail-song-drag { color: var(--text-tertiary); font-size: 14px; cursor: grab; flex-shrink: 0; }
+        .pl-detail-song-cover { width: 36px; height: 36px; border-radius: 6px; object-fit: cover; flex-shrink: 0; border: 1px solid var(--border); }
+        .pl-detail-song-info { flex: 1; min-width: 0; }
+        .pl-detail-song-title { font-size: 14px; font-weight: 600; }
+        .pl-detail-song-artist { font-size: 12px; color: var(--text-secondary); }
+        .pl-detail-song-duration { font-size: 12px; color: var(--text-tertiary); font-weight: 500; flex-shrink: 0; }
+        .pl-detail-song-remove { width: 26px; height: 26px; border-radius: 50%; border: none; background: none; color: var(--text-tertiary); font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; opacity: 0; transition: all 0.2s ease; }
+        .pl-detail-song-item:hover .pl-detail-song-remove { opacity: 1; }
+        .pl-detail-song-remove:active { background: rgba(239,68,68,0.1); color: var(--error); }
+        .pl-detail-total-duration { font-size: 12px; font-weight: 600; color: var(--text-tertiary); padding: 8px 8px 0; border-top: 1px solid var(--border); margin-top: 4px; }
+        .pl-sched-view-toggle { display: flex; align-items: center; gap: 8px; }
+        .pl-sched-toggle-btn { display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; border: 1.5px solid var(--border); background: var(--surface-card); color: var(--text-secondary); cursor: pointer; transition: all 0.2s ease; }
+        .pl-sched-toggle-btn:active { transform: scale(0.95); }
+        .pl-sched-toggle-btn.active { border-color: var(--primary); color: var(--primary); }
+        .pl-schedule-view { display: flex; flex-direction: column; gap: 10px; }
+        .pl-sv-header { display: flex; align-items: center; justify-content: space-between; }
+        .pl-sv-title { font-size: 16px; font-weight: 700; }
+        .pl-sv-grid-wrapper { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        .pl-sv-grid-wrapper::-webkit-scrollbar { display: none; }
+        .pl-sv-grid { display: grid; grid-template-columns: 50px repeat(7, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; min-width: 600px; }
+        .pl-sv-corner { background: var(--surface-card); }
+        .pl-sv-day-header { background: var(--surface-card); padding: 8px 4px; text-align: center; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); }
+        .pl-sv-day-header.today { background: rgba(232,168,56,0.1); color: var(--primary); }
+        .pl-sv-time { background: var(--surface-card); padding: 2px 6px; font-size: 9px; color: var(--text-tertiary); font-weight: 500; text-align: right; display: flex; align-items: flex-start; justify-content: flex-end; }
+        .pl-sv-cell { background: var(--surface-elevated); min-height: 24px; padding: 1px; position: relative; cursor: default; }
+        .pl-sv-cell.today { background: rgba(232,168,56,0.03); }
+        .pl-sv-cell.has-block { padding: 1px; }
+        .pl-sv-block { border-radius: 3px; padding: 1px 4px; font-size: 8px; font-weight: 700; color: #fff; margin-bottom: 1px; cursor: pointer; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 1.4; }
+        .pl-sv-block:active { opacity: 0.8; }
+        .pl-empty-state { text-align: center; padding: 50px 20px; color: var(--text-tertiary); }
+        .pl-empty-state i { font-size: 40px; opacity: 0.3; margin-bottom: 12px; display: block; }
+        .pl-empty-state h4 { font-size: 16px; font-weight: 700; margin: 0 0 6px; color: var(--text-primary); }
+        .pl-empty-state p { font-size: 13px; margin: 0 0 16px; }
+        .pl-type-options { display: flex; flex-direction: column; gap: 6px; }
+        .pl-type-option { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border: 1.5px solid var(--border); border-radius: var(--radius-md); cursor: pointer; transition: all 0.2s ease; }
+        .pl-type-option:active { transform: scale(0.98); }
+        .pl-type-option.active { border-color: var(--primary); background: rgba(232,168,56,0.03); }
+        .pl-type-option input { display: none; }
+        .pl-type-option-label { font-size: 14px; font-weight: 600; }
+        .pl-type-option-desc { font-size: 12px; color: var(--text-tertiary); }
+        .pl-order-options { display: flex; gap: 8px; }
+        .pl-order-option { display: flex; align-items: center; gap: 6px; padding: 10px 16px; border: 1.5px solid var(--border); border-radius: var(--radius-md); cursor: pointer; font-size: 13px; font-weight: 600; transition: all 0.2s ease; }
+        .pl-order-option:active { transform: scale(0.95); }
+        .pl-order-option.active { border-color: var(--primary); background: rgba(232,168,56,0.03); }
+        .pl-order-option input { display: none; }
+        .pl-form-danger { padding: 10px 20px; background: rgba(239,68,68,0.1); border: none; border-radius: var(--radius-sm); color: var(--error); font-size: 13px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.2s ease; }
+        .pl-form-danger:active { background: rgba(239,68,68,0.2); }
+        .pl-form-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+        .media-modal-close { width: 32px; height: 32px; border-radius: 50%; border: none; background: var(--surface-elevated); color: var(--text-secondary); font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .media-modal-close:active { background: var(--surface-hover); }
+        .pl-picker-checkbox { width: 20px; height: 20px; border-radius: 4px; border: 2px solid var(--border); display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 11px; color: #fff; background: transparent; }
+        .pl-picker-checkbox.checked { background: var(--primary); border-color: var(--primary); }
+        .pl-picker-already { font-size: 11px; color: var(--text-tertiary); font-weight: 500; flex-shrink: 0; }
+        .pl-picker-footer { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; border-top: 1px solid var(--border); }
+        .pl-picker-count { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+        @media (max-width: 767px) {
+          .pl-two-panel { flex-direction: column; }
+          .pl-left-compact { max-width: 100%; }
+          .pl-detail-back { display: flex; }
+          .pl-right-panel { margin-left: 0; }
+          .pl-filter-tab { font-size: 12px; padding: 6px 10px; }
+        }
+          
+          /* ========== SKELETON LOADERS ========== */
+          .skeleton-loading { background: linear-gradient(90deg, var(--surface) 25%, var(--surface-hover) 50%, var(--surface) 75%); background-size: 200% 100%; animation: shimmer 1.5s ease-in-out infinite; border-radius: var(--radius-md); }
+          .skeleton-line { height: 14px; width: 100%; margin-bottom: 8px; }
+          .skeleton-line.w60 { width: 60%; }
+          .skeleton-line.w40 { width: 40%; }
+          .skeleton-line.w80 { width: 80%; }
+          .skeleton-line.w30 { width: 30%; }
+          .skeleton-line.h24 { height: 24px; }
+          .skeleton-line.h40 { height: 40px; }
+          .skeleton-line.h100 { height: 100px; }
+          .skeleton-block { background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px; }
+          .skeleton-img { background: linear-gradient(90deg, var(--surface) 25%, var(--surface-hover) 50%, var(--surface) 75%); background-size: 200% 100%; animation: shimmer 1.5s ease-in-out infinite; border-radius: var(--radius-md); }
+          .skeleton-card { background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+          @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+          /* ========== GO LIVE TAB ========== */
+          .golive-content { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+
+          .gl-status-card {
+            display: flex; align-items: center; gap: 14px;
+            padding: 18px; background: var(--surface-card);
+            border: 1px solid var(--border); border-radius: var(--radius-lg);
+          }
+          .gl-status-left { display: flex; align-items: center; }
+          .gl-live-indicator {
+            display: flex; flex-direction: column; align-items: center; gap: 6px;
+            width: 64px; height: 64px; border-radius: var(--radius-md);
+            background: var(--surface-elevated); justify-content: center;
+          }
+          .gl-live-indicator.live { background: rgba(239,68,68,0.12); }
+          .gl-live-dot {
+            width: 12px; height: 12px; border-radius: 50%;
+            background: var(--text-tertiary);
+          }
+          .gl-live-dot.pulse { background: var(--error); animation: livePulse 1.5s ease-in-out infinite; }
+          .gl-live-label { font-size: 8px; font-weight: 700; letter-spacing: 1px; color: var(--text-tertiary); }
+          .gl-live-indicator.live .gl-live-label { color: var(--error); }
+          .gl-status-info { flex: 1; min-width: 0; }
+          .gl-status-title { font-size: 16px; font-weight: 700; }
+          .gl-status-sub { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+          .gl-listeners {
+            display: inline-flex; align-items: center; gap: 5px;
+            margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--primary);
+          }
+
+          .gl-player-container {
+            background: var(--surface-card); border: 1px solid var(--border);
+            border-radius: var(--radius-lg); overflow: hidden;
+          }
+          .gl-player-header {
+            display: flex; align-items: center; gap: 8px;
+            padding: 12px 14px; border-bottom: 1px solid var(--border);
+            font-size: 13px; font-weight: 600;
+          }
+          .gl-player-header i { color: var(--text-tertiary); font-size: 14px; }
+          .gl-player-badge {
+            margin-left: auto; display: flex; align-items: center; gap: 5px;
+            padding: 3px 10px; border-radius: 6px; font-size: 10px; font-weight: 700;
+            background: var(--surface-elevated); color: var(--text-tertiary);
+          }
+          .gl-player-badge.live { background: rgba(239,68,68,0.12); color: var(--error); }
+          .gl-player-dot {
+            width: 6px; height: 6px; border-radius: 50%; background: var(--text-tertiary);
+          }
+          .gl-player-dot.pulse { background: var(--error); animation: livePulse 1.5s ease-in-out infinite; }
+          .gl-player-iframe {
+            width: 100%; height: 120px; border: none; display: block;
+          }
+          .gl-connection-box {
+            background: var(--surface-card); border: 1px solid var(--border);
+            border-radius: var(--radius-lg); overflow: hidden;
+          }
+          .gl-conn-row {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 12px 14px; border-bottom: 1px solid var(--border);
+            cursor: pointer; transition: background 0.15s ease;
+          }
+          .gl-conn-row:last-child { border-bottom: none; }
+          .gl-conn-row:active { background: var(--surface-hover); }
+          .gl-conn-label {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 13px; font-weight: 600; color: var(--text-secondary);
+          }
+          .gl-conn-label i { width: 16px; font-size: 13px; color: var(--text-tertiary); }
+          .gl-conn-value {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+          }
+          .gl-conn-value i { font-size: 13px; color: var(--text-tertiary); cursor: pointer; }
+          .gl-conn-value i:active { color: var(--primary); }
+          .gl-pw-input {
+            background: var(--surface-elevated); border: 1.5px solid var(--border);
+            border-radius: 6px; padding: 4px 8px; color: var(--text-primary);
+            font-size: 13px; font-weight: 700; font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            outline: none; width: 130px; text-align: center;
+          }
+          .gl-pw-input:focus { border-color: var(--primary); }
+          .gl-pw-toggle {
+            background: none; border: none; color: var(--text-tertiary);
+            cursor: pointer; font-size: 14px; padding: 0;
+          }
+          .gl-pw-toggle:active { color: var(--primary); }
+          .gl-conn-note {
+            display: flex; align-items: center; gap: 6px;
+            padding: 8px 0 0; font-size: 11px; color: var(--text-tertiary);
+          }
+          .gl-conn-note i { font-size: 12px; }
+
+          .gl-streamer-list { display: flex; flex-direction: column; gap: 6px; }
+          .gl-streamer-item.selected { border-color: var(--primary); border-left: 3px solid var(--primary); padding-left: 12px; }
+          .gl-streamer-check { margin-left: 4px; color: var(--success); font-size: 14px; }
+          .gl-streamer-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+          .gl-streamer-edit {
+            width: 28px; height: 28px; border-radius: 50%; border: none;
+            background: none; color: var(--text-tertiary); cursor: pointer;
+            font-size: 12px; display: flex; align-items: center; justify-content: center;
+          }
+          .gl-streamer-edit:active { background: var(--surface-elevated); color: var(--primary); }
+          .gl-streamer-item {
+            display: flex; align-items: center; gap: 10px;
+            padding: 12px 14px; background: var(--surface-card);
+            border: 1px solid var(--border); border-radius: var(--radius-md);
+            transition: all 0.2s ease;
+          }
+          .gl-streamer-item.live { border-color: rgba(239,68,68,0.2); background: rgba(239,68,68,0.03); }
+          .gl-streamer-status {
+            width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+            background: var(--text-tertiary);
+          }
+          .gl-streamer-status.live { background: var(--error); }
+          .gl-streamer-dot.pulse { animation: livePulse 1.5s ease-in-out infinite; }
+          .gl-streamer-info { flex: 1; min-width: 0; }
+          .gl-streamer-name { font-size: 14px; font-weight: 600; }
+          .gl-streamer-user { font-size: 12px; color: var(--text-tertiary); }
+          .gl-streamer-meta { flex-shrink: 0; }
+          .gl-streamer-live-tag {
+            padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700;
+            background: rgba(239,68,68,0.12); color: var(--error);
+          }
+          .gl-streamer-off-tag {
+            padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;
+            background: var(--surface-elevated); color: var(--text-tertiary);
+          }
+          .gl-streamer-delete {
+            width: 28px; height: 28px; border-radius: 50%; border: none;
+            background: none; color: var(--text-tertiary); cursor: pointer;
+            font-size: 13px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+          }
+          .gl-streamer-delete:active { background: rgba(239,68,68,0.1); color: var(--error); }
+          .gl-streamer-delete:disabled { opacity: 0.4; }
+
+          .gl-empty {
+            display: flex; flex-direction: column; align-items: center;
+            padding: 30px 0; text-align: center; gap: 6px;
+          }
+          .gl-empty i { font-size: 28px; color: var(--text-tertiary); opacity: 0.4; }
+          .gl-empty p { font-size: 15px; font-weight: 600; margin: 0; }
+          .gl-empty span { font-size: 13px; color: var(--text-tertiary); }
+
+          .gl-history-list { display: flex; flex-direction: column; gap: 4px; }
+          .gl-history-item {
+            display: flex; align-items: center; gap: 10px;
+            padding: 10px 12px; background: var(--surface-card);
+            border: 1px solid var(--border); border-radius: var(--radius-sm);
+          }
+          .gl-history-icon {
+            width: 32px; height: 32px; border-radius: var(--radius-sm);
+            background: rgba(232,168,56,0.08); color: var(--primary);
+            display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+          }
+          .gl-history-icon i { font-size: 14px; }
+          .gl-history-info { flex: 1; }
+          .gl-history-date { font-size: 13px; font-weight: 600; }
+          .gl-history-time { font-size: 11px; color: var(--text-tertiary); }
+
+          .gl-form-row { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+          .gl-form-row label { font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
+          .gl-form-note {
+            display: flex; align-items: flex-start; gap: 6px;
+            padding: 10px 12px; background: rgba(232,168,56,0.04);
+            border: 1px solid rgba(232,168,56,0.1); border-radius: var(--radius-sm);
+            font-size: 12px; color: var(--text-secondary); line-height: 1.4;
+          }
+          .gl-form-note i { font-size: 13px; color: var(--primary); margin-top: 1px; flex-shrink: 0; }
+
+          `}</style>
+
+      <ToastBridge />
+
+      <div className="app-container">
+        <div className="status-bar"></div>
+
+        {/* ========== RADIO HEADER ========== */}
+        <header className="radio-header">
+          <div className="radio-header-logo"><i className="fas fa-tower-broadcast"></i></div>
+          <div className="radio-header-info">
+            <div className="radio-header-name">Turningpoint Radio</div>
+            <div className="radio-header-sub">Turningpoint Church Nakuru Radio Station</div>
+          </div>
+          <div className="radio-header-right">
+            <div className={`on-air-badge ${isLive ? "live" : "off"}`}>
+              <span className={`on-air-dot ${isLive ? "live" : "off"}`}></span>
+              {isLive ? "On Air" : "Off Air"}
+            </div>
+            <div className="listener-count">
+              <i className="fas fa-headphones"></i>
+              {listeners}
+            </div>
+          </div>
+        </header>
+
+        {/* ========== NOW PLAYING BAR ========== */}
+        <div className="now-playing-bar">
+          <div className="npb-thumb">
+            <img src="https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=60&h=60&fit=crop" alt="Art" />
+          </div>
+          <div className="npb-info">
+            <div className="npb-title">Amazing Grace (My Chains Are Gone)</div>
+            <div className="npb-artist">Chris Tomlin</div>
+          </div>
+          <button
+            className="npb-player-btn"              onClick={() => {
+              const newPlaying = !isPlaying;
+              setIsPlaying(newPlaying);
+              window.dispatchEvent(
+                new CustomEvent("show-toast", {
+                  detail: { title: newPlaying ? "Playing" : "Paused", message: `Stream ${newPlaying ? "resumed" : "paused"}`, type: "info", duration: 2000 },
+                })
+              );
+            }}
+          >
+            <i className={`fas ${isPlaying ? "fa-pause" : "fa-play"}`}></i>
+          </button>
+        </div>
+
+        {/* ========== TAB BAR ========== */}
+        <nav className="tab-bar">
+          {sidebarTabs.map((tab) => (
+            <button
+              key={tab.id}
+              className={`tab-btn ${activeTab === tab.id ? "active" : ""}`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              <i className={`fas ${tab.icon}`}></i>
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+
+        {/* ========== MAIN CONTENT ========== */}
+        <div className="content-scroll" id="contentScroll">
+          {renderContent()}
+          <div style={{ height: "40px" }}></div>
+        </div>
+
+        {/* ========== BOTTOM NAV ========== */}
+        <AdminBottomNav />
+      </div>
+    </>
+  );
+}

@@ -110,6 +110,7 @@ export default function WatchPage() {
   // ========== REAL DATA FETCHING ==========
 
   const [allLoaded, setAllLoaded] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const lastDocRef = useRef<any>(null);
 
   useEffect(() => {
@@ -140,6 +141,7 @@ export default function WatchPage() {
     let cancelled = false;
     const loadMore = async () => {
       const remaining: YouTubeVideo[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let cursor: any = lastDocRef.current;
       while (cursor) {
         const page = await getVideosPage(50, cursor);
@@ -291,8 +293,7 @@ export default function WatchPage() {
         } catch { /* noop */ }
       }
     }
-    setWatchedVideos(new Set(watched));
-    setLocalSearches(loadRecentLocalSearches());
+    queueMicrotask(() => { setWatchedVideos(new Set(watched)); setLocalSearches(loadRecentLocalSearches()); });
   }, []);
 
   // Online/offline detection
@@ -336,9 +337,7 @@ export default function WatchPage() {
   // Search debounce
   useEffect(() => {
     if (!searchQuery.trim()) {
-      setShowSearchResults(false);
-      setSearchResults([]);
-      setSubmittedSearch("");
+      queueMicrotask(() => { setShowSearchResults(false); setSearchResults([]); setSubmittedSearch(""); });
       return;
     }
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
@@ -390,12 +389,12 @@ export default function WatchPage() {
   async function handleShare() {
     try {
       const { Share } = await import("@capacitor/share");
-      await Share.share({ title: "Turningpoint Church Nakuru", text: "Check out Turningpoint Church Nakuru", url: window.location.href });
+      await Share.share({ title: "Kingdom Seekers Church Nakuru", text: "Check out Kingdom Seekers Church Nakuru", url: window.location.href });
     } catch {
       if (navigator.share) {
         navigator.share({
-          title: "Turningpoint Church Nakuru",
-          text: "Check out Turningpoint Church Nakuru",
+          title: "Kingdom Seekers Church Nakuru",
+          text: "Check out Kingdom Seekers Church Nakuru",
           url: window.location.href,
         }).catch(() => {});
       } else {
@@ -836,7 +835,7 @@ export default function WatchPage() {
         {offline && (
           <div className="offline-banner">
             <i className="fas fa-wifi-slash"></i>
-            <span>You're offline — check your connection</span>
+            <span>You&apos;re offline — check your connection</span>
           </div>
         )}
 
@@ -844,7 +843,7 @@ export default function WatchPage() {
         <div className="header">
           <div className="header-logo"><i className="fas fa-video"></i></div>
           <div className="header-info">
-            <div className="header-church">Turningpoint Church Nakuru</div>
+            <div className="header-church">Kingdom Seekers Church Nakuru</div>
           </div>
           <div className="header-actions">
             <button
@@ -901,7 +900,7 @@ export default function WatchPage() {
                     <div className="live-banner-title">
                       {ytLive.status.isLive
                         ? ytLive.status.video?.title
-                        : "Turningpoint Church Nakuru is streaming live"}
+                        : "Kingdom Seekers Church Nakuru is streaming live"}
                     </div>
                     <div className="live-banner-meta">
                       {ytLive.status.isLive ? (
@@ -1210,13 +1209,13 @@ export default function WatchPage() {
                 searchResults.length === 0 ? (
                   <div className="search-empty">
                     <i className="fas fa-search"></i>
-                    <h3>No videos found for "{submittedSearch}"</h3>
+                    <h3>No videos found for &quot;{submittedSearch}&quot;</h3>
                     <p>Try a different search term</p>
                   </div>
                 ) : (
                   <>
                     <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 12, fontWeight: 500 }}>
-                      {searchResults.length} result{searchResults.length !== 1 ? "s" : ""} for "{submittedSearch}"
+                      {searchResults.length} result{searchResults.length !== 1 ? "s" : ""} for &quot;{submittedSearch}&quot;
                     </div>
                     {searchResults.slice(0, searchPageSize).map((video) => (
                       <div className="search-result-item" key={video.id} onClick={() => handlePlayVideo(video)}>

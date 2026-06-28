@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# --- Build the Android APK for Turningpoint Church Nakuru ---
+# --- Build the Android APK for Kingdom Seekers Church Nakuru ---
 # This script:
 #   1. Temporarily moves API routes out (they can't be static-exported)
 #   2. Builds the Next.js app as a static export
@@ -11,7 +11,7 @@ set -euo pipefail
 #   6. Copies the APK to ~/Documents
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-OUTPUT_NAME="Turningpoint Church Nakuru.apk"
+OUTPUT_NAME="Kingdom Seekers Church Nakuru.apk"
 OUTPUT_PATH="$HOME/Documents/$OUTPUT_NAME"
 JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk}"
 
@@ -24,7 +24,7 @@ JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk}"
 # from a bundled APK unless the backend is on the same host).
 
 echo "=========================================="
-echo "  Building Turningpoint Church Nakuru APK"
+echo "  Building Kingdom Seekers Church Nakuru APK"
 echo "=========================================="
 echo ""
 

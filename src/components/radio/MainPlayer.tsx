@@ -97,7 +97,7 @@ export default function MainPlayer() {
         <div className="player-info">
           <div className="player-live-badge"><span className="pulse"></span>Live Now</div>
           <div className="player-track">Sunday Morning Worship</div>
-          <div className="player-artist">Turningpoint Church Nakuru · Worship Team</div>
+          <div className="player-artist">Kingdom Seekers Church Nakuru · Worship Team</div>
         </div>
         <div className="player-progress">
           <div className="progress-bar" id="progressBar">

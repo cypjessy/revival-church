@@ -39,7 +39,7 @@ function timeAgo(dateStr: string): string {
    ================================================================== */
 
 const church = {
-  name: "Turningpoint Church Nakuru",
+  name: "Kingdom Seekers Church Nakuru",
   tagline: "Worship. Word. Community.",
   logoInitials: "TP",
 };
@@ -82,6 +82,7 @@ function RotatingGallery({
     return albums.filter((a) => a.photoCount > 0 || entries.some((e) => e.albumId === a.id));
   }, [albums, entries]);
 
+  const [heroSeed] = useState(() => Math.random());
   // Build a flat list of all images (url + album info) for the hero slideshow
   const heroImages = useMemo(() => {
     const all: { url: string; albumId: string; albumTitle: string; photoCount: number }[] = [];
@@ -99,9 +100,15 @@ function RotatingGallery({
         });
       }
     }
-    // Shuffle for variety on each load
-    return all.sort(() => Math.random() - 0.5);
-  }, [validAlbums, entries]);
+    // Seeded shuffle for variety on each load
+    let s = heroSeed;
+    for (let i = all.length - 1; i > 0; i--) {
+      s = ((s * 9301 + 49297) % 233280);
+      const j = Math.floor((s / 233280) * (i + 1));
+      [all[i], all[j]] = [all[j], all[i]];
+    }
+    return all;
+  }, [validAlbums, entries, heroSeed]);
 
   const intervalRefs = useRef<(ReturnType<typeof setInterval> | null)[]>([]);
 
@@ -118,10 +125,17 @@ function RotatingGallery({
 
   // Small grid display (first 6 albums)
   const displayCount = 6;
+  const [albumSeed] = useState(() => Math.random());
   const displayAlbums = useMemo(() => {
-    const shuffled = [...validAlbums].sort(() => Math.random() - 0.5);
+    const shuffled = [...validAlbums];
+    let s = albumSeed;
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      s = ((s * 9301 + 49297) % 233280);
+      const j = Math.floor((s / 233280) * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
     return shuffled.slice(0, displayCount);
-  }, [validAlbums, albumsLoading]);
+  }, [validAlbums, albumSeed]);
 
   const getAlbumImages = useCallback((album: Album): string[] => {
     const imgs: string[] = [];
@@ -289,9 +303,9 @@ interface ScheduleSlot {
 
 function getFallbackSchedule(): ScheduleSlot[] {
   const h = new Date().getHours();
-  if (h < 9) return [{ time: "9:00 AM", label: "Sunday Worship Service", isNow: false, hasContent: true, stationName: "Turningpoint Radio" }];
-  if (h < 12) return [{ time: "9:00 AM", label: "Sunday Worship Service", isNow: true, hasContent: true, stationName: "Turningpoint Radio" }];
-  return [{ time: "9:00 AM", label: "Sunday Worship Service", isNow: false, hasContent: true, stationName: "Turningpoint Radio" }];
+  if (h < 9) return [{ time: "9:00 AM", label: "Sunday Worship Service", isNow: false, hasContent: true, stationName: "Kingdom Seekers Radio" }];
+  if (h < 12) return [{ time: "9:00 AM", label: "Sunday Worship Service", isNow: true, hasContent: true, stationName: "Kingdom Seekers Radio" }];
+  return [{ time: "9:00 AM", label: "Sunday Worship Service", isNow: false, hasContent: true, stationName: "Kingdom Seekers Radio" }];
 }
 
 function parseTimeToMinutes(t: string): number {
@@ -337,10 +351,26 @@ export default function DashboardPage() {
   const greeting = getGreeting();
   const userDoc = useAppStore((s) => s.userDoc);
 
+  const [showOnboarding, setShowOnboarding] = useState(() => {
+    // Check Firestore first (persists across devices), then localStorage fallback
+    if (typeof window !== "undefined") {
+      const localDone = localStorage.getItem("onboarding_done") === "true";
+      return localDone ? false : true; // default true, updated when userDoc loads
+    }
+    return true;
+  });
+
+  // Once userDoc loads, respect Firestore's onboarding_done
+  useEffect(() => {
+    if (userDoc && userDoc.onboarding_done === true) {
+      queueMicrotask(() => setShowOnboarding(false));
+      localStorage.setItem("onboarding_done", "true");
+    }
+  }, [userDoc]);
+
   const completeOnboarding = useCallback(async () => {
     localStorage.setItem("onboarding_done", "true");
     setShowOnboarding(false);
-    // Persist to Firestore for cross-device sync
     if (userDoc?.uid) {
       try {
         await updateDoc(doc(db, "users", userDoc.uid), { onboarding_done: true });
@@ -355,24 +385,6 @@ export default function DashboardPage() {
     } catch (_) {}
     window.location.href = "/";
   };
-  const [showOnboarding, setShowOnboarding] = useState(() => {
-    // Check Firestore first (persists across devices), then localStorage fallback
-    if (typeof window !== "undefined") {
-      const localDone = localStorage.getItem("onboarding_done") === "true";
-      return localDone ? false : true; // default true, updated when userDoc loads
-    }
-    return true;
-  });
-
-  // Once userDoc loads, respect Firestore's onboarding_done
-  useEffect(() => {
-    if (userDoc) {
-      if (userDoc.onboarding_done === true) {
-        setShowOnboarding(false);
-        localStorage.setItem("onboarding_done", "true");
-      }
-    }
-  }, [userDoc]);
   const [onboardingSlide, setOnboardingSlide] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [listeners, setListeners] = useState(0);
@@ -411,15 +423,15 @@ export default function DashboardPage() {
   useEffect(() => {
     const streamUrl = npData?.station?.listenUrl || "";
     const nowPlaying = audio.isPlaying && audio.currentStreamUrl === streamUrl;
-    setIsPlaying(nowPlaying);
+    queueMicrotask(() => setIsPlaying(nowPlaying));
   }, [audio.isPlaying, audio.currentStationId, npData]);
 
   // Push now-playing metadata to Android media notification when audio is playing
   useEffect(() => {
     if (audio.isPlaying) {
       const np = npData?.nowPlaying;
-      const title = np?.song?.title || "Turningpoint Radio";
-      const artist = np?.song?.artist || "Turningpoint Church Nakuru";
+      const title = np?.song?.title || "Kingdom Seekers Radio";
+      const artist = np?.song?.artist || "Kingdom Seekers Church Nakuru";
       const albumArt = np?.song?.albumArt;
       audio.updateMediaSession(title, artist, albumArt);
     }
@@ -858,7 +870,7 @@ export default function DashboardPage() {
       {/* TODAY'S BROADCAST SCHEDULE */}
       <section className="feed-section">
         <div className="section-header-inline">
-          <h2 className="section-title">Today's Broadcast Schedule</h2>
+          <h2 className="section-title">Today&apos;s Broadcast Schedule</h2>
           <button className="section-link" onClick={() => router.push("/radio")}>Full Schedule <i className="fas fa-chevron-right"></i></button>
         </div>
         <div className="schedule-today">
@@ -875,7 +887,7 @@ export default function DashboardPage() {
                 <div className="st-time">{slot.time}</div>
                 <div className="st-body">
                   <div className={`st-label${slot.isNow ? "" : " upcoming"}`}>{slot.label}</div>
-                  <div className="st-station"><i className="fas fa-radio"></i> {slot.stationName || "Turningpoint Radio"}</div>
+                  <div className="st-station"><i className="fas fa-radio"></i> {slot.stationName || "Kingdom Seekers Radio"}</div>
                 </div>
                 {slot.isNow && <span className="st-now-badge">NOW</span>}
               </div>
@@ -1930,7 +1942,7 @@ export default function DashboardPage() {
         {offline && (
           <div className="offline-banner">
             <i className="fas fa-wifi-slash"></i>
-            <span>You're offline — showing cached content</span>
+            <span>You&apos;re offline — showing cached content</span>
           </div>
         )}
 

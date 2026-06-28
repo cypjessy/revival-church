@@ -55,7 +55,7 @@ export default function LoginForm() {
         return;
       }
 
-      const storedCreds = await NativeBiometric.getCredentials({ server: "turningpoint-church-auth" });
+      const storedCreds = await NativeBiometric.getCredentials({ server: "kingdom-seekers-church-auth" });
       if (!storedCreds?.username || !storedCreds?.password) {
         showToast("No Credentials", "Please sign in manually first to set up biometrics", "info");
         setHasBiometric(false);
@@ -63,7 +63,7 @@ export default function LoginForm() {
         return;
       }
 
-      await NativeBiometric.verifyIdentity({ reason: "Sign in to Turningpoint Church Nakuru", title: "Biometric Sign In" });
+      await NativeBiometric.verifyIdentity({ reason: "Sign in to Kingdom Seekers Church Nakuru", title: "Biometric Sign In" });
 
       setIsLoading(true);
       const result = await signInWithEmailAndPassword(auth, storedCreds.username, storedCreds.password);
@@ -74,6 +74,7 @@ export default function LoginForm() {
       const userSnap = await getDoc(userDocRef);
 
       if (userSnap.exists()) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const userData = userSnap.data() as any;
         setUserDoc(userData);
         setChurchConfig(churchConfig);
@@ -115,6 +116,7 @@ export default function LoginForm() {
       const userSnap = await getDoc(userDocRef);
 
       if (userSnap.exists()) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const userData = userSnap.data() as any;
         setUserDoc(userData);
         setChurchConfig(churchConfig);
@@ -141,8 +143,9 @@ export default function LoginForm() {
         showToast("Welcome!", "Account found. Setting up...", "info");
         setTimeout(() => router.push("/dashboard"), 500);
       }
-    } catch (err: any) {
-      const code = err.code;
+    } catch (err: unknown) {
+      const e = err as { code?: string; message?: string };
+      const code = e.code;
       await hapticError();
       if (code === "auth/user-not-found" || code === "auth/wrong-password" || code === "auth/invalid-credential") {
         setError("Invalid email or password");
@@ -151,7 +154,7 @@ export default function LoginForm() {
       } else if (code === "auth/invalid-email") {
         setError("Invalid email address");
       } else {
-        setError(err.message || "Something went wrong");
+        setError(e.message || "Something went wrong");
       }
     } finally {
       setIsLoading(false);
@@ -170,6 +173,7 @@ export default function LoginForm() {
       const userSnap = await getDoc(userDocRef);
 
       if (userSnap.exists()) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const userData = userSnap.data() as any;
         setUserDoc(userData);
         setChurchConfig(churchConfig);
@@ -185,9 +189,10 @@ export default function LoginForm() {
         document.getElementById("registerModal")?.classList.add("active");
         document.body.style.overflow = "hidden";
       }
-    } catch (err: any) {
-      if (err.code !== "auth/popup-closed-by-user" && err.code !== "auth/cancelled-popup-request") {
-        setError(err.message || "Google sign in failed");
+    } catch (err: unknown) {
+      const e = err as { code?: string; message?: string };
+      if (e.code !== "auth/popup-closed-by-user" && e.code !== "auth/cancelled-popup-request") {
+        setError(e.message || "Google sign in failed");
       }
     } finally {
       setIsLoading(false);

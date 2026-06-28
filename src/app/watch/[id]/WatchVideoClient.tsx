@@ -62,7 +62,7 @@ export default function WatchVideoClient() {
       const raw = localStorage.getItem(`watch_progress_${id}`);
       if (raw) {
         const prog = JSON.parse(raw);
-        setWatchProgress(prog.position || 0);
+        queueMicrotask(() => setWatchProgress(prog.position || 0));
       }
     } catch {}
   }, [id]);
@@ -314,7 +314,7 @@ export default function WatchVideoClient() {
             <div className="w-channel-bar">
               <div className="w-channel-avatar"><i className="fas fa-cross"></i></div>
               <div className="w-channel-info">
-                <div className="w-channel-name">Turningpoint Church Nakuru</div>
+                <div className="w-channel-name">Kingdom Seekers Church Nakuru</div>
                 <div className="w-channel-sub">{formatCount(allVideos.length)} videos</div>
               </div>
               {seriesName && <div className="w-series-tag" onClick={()=>{router.push("/watch");}}><i className="fas fa-list"></i> {seriesName}</div>}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 
 interface NavTab {
@@ -12,56 +12,50 @@ interface NavTab {
 
 const tabs: NavTab[] = [
   { tab: "dashboard", icon: "fa-chart-line", label: "Dashboard" },
-  { tab: "content", icon: "fa-photo-film", label: "Content" },
-  { tab: "members", icon: "fa-users", label: "Members", showBadge: true },
   { tab: "radio", icon: "fa-tower-broadcast", label: "Radio" },
+  { tab: "meetings", icon: "fa-people-group", label: "Meetings" },
+  { tab: "content", icon: "fa-photo-film", label: "Content" },
   { tab: "video", icon: "fa-video", label: "Video" },
-  { tab: "accounts", icon: "fa-user-shield", label: "Accounts" },
+  { tab: "members", icon: "fa-users", label: "Members", showBadge: true },
 ];
 
 const tabRoutes: Record<string, string> = {
   dashboard: "/admin",
-  content: "/admin/content",
-  members: "/admin/members",
-  accounts: "/admin/accounts",
   radio: "/admin/radio",
+  meetings: "/admin/meetings",
+  content: "/admin/content",
   video: "/admin/video",
+  members: "/admin/members",
 };
 
 export default function AdminBottomNav() {
   const router = useRouter();
   const pathname = usePathname();
-  const cleanupRef = useRef<(() => void) | null>(null);
+  const [isTablet, setIsTablet] = useState(false);
+
+  useEffect(() => {
+    const check = () => setIsTablet(window.innerWidth >= 768);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
 
   const activeTab = Object.entries(tabRoutes).find(
     ([, route]) => pathname === route
   )?.[0] || "dashboard";
 
-  useEffect(() => {
-    const navItems = document.querySelectorAll<HTMLElement>(".admin-nav-item");
-    const handlers: (() => void)[] = [];
-
-    navItems.forEach((item) => {
-      const handler = () => {
-        const tab = item.dataset.tab;
-        const route = tabRoutes[tab || ""];
-        if (route) router.push(route);
-      };
-      item.addEventListener("click", handler);
-      handlers.push(() => item.removeEventListener("click", handler));
-    });
-
-    cleanupRef.current = () => handlers.forEach((h) => h());
-    return () => cleanupRef.current?.();
-  }, [router]);
+  const navigate = (tab: string) => {
+    const route = tabRoutes[tab];
+    if (route) router.push(route);
+  };
 
   return (
-    <nav className="bottom-nav">
+    <nav className={isTablet ? "admin-sidebar" : "bottom-nav"}>
       {tabs.map((tab) => (
         <button
           key={tab.tab}
-          className={`admin-nav-item nav-item${tab.tab === activeTab ? " active" : ""}`}
-          data-tab={tab.tab}
+          className={`nav-item${tab.tab === activeTab ? " active" : ""}`}
+          onClick={() => navigate(tab.tab)}
         >
           <i className={`fas ${tab.icon}`}></i>
           <span>{tab.label}</span>

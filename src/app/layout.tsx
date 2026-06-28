@@ -8,13 +8,13 @@ import { RootErrorBoundary } from "@/components/shared/RootErrorBoundary";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Turningpoint Church Nakuru",
+  title: "Kingdom Seekers Church Nakuru",
   description:
-    "Turningpoint Church Nakuru connects you to live radio, sermons, videos, and community — anywhere, anytime.",
+    "Kingdom Seekers Church Nakuru connects you to live radio, sermons, videos, and community — anywhere, anytime.",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "Turningpoint Church Nakuru",
+    title: "Kingdom Seekers Church Nakuru",
   },
   icons: {
     icon: "/favicon.ico",

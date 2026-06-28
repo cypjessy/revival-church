@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Turningpoint Church Nakuru</string>
-    <string name="title_activity_main">Turningpoint Church Nakuru</string>
+    <string name="app_name">Kingdom Seekers Church Nakuru</string>
+    <string name="title_activity_main">Kingdom Seekers Church Nakuru</string>
     <string name="package_name">com.faithstream.app</string>
     <string name="custom_url_scheme">com.faithstream.app</string>
 </resources>

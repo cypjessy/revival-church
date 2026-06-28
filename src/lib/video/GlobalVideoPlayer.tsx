@@ -126,7 +126,7 @@ export function GlobalVideoPlayer({ video, allVideos, seriesList, onClose, onPla
   const share = useCallback(() => {
     const url = `https://www.youtube.com/watch?v=${video?.youtubeId}`;
     if (navigator.share) {
-      navigator.share({ title: video?.title || "Turningpoint Church Nakuru", text: `Watch "${video?.title}" on Turningpoint Church Nakuru`, url }).catch(() => {});
+      navigator.share({ title: video?.title || "Kingdom Seekers Church Nakuru", text: `Watch "${video?.title}" on Kingdom Seekers Church Nakuru`, url }).catch(() => {});
     } else {
       window.dispatchEvent(new CustomEvent("show-toast", {
         detail: { title: "Share", message: "Link copied to clipboard!", type: "success", duration: 2500 },

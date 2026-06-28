@@ -10,6 +10,7 @@ export async function isPiPSupported(): Promise<boolean> {
   if (_supported !== null) return _supported;
 
   try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const cap = (window as Record<string, any>).Capacitor;
     if (cap?.plugins?.PiP?.isSupported) {
       const result = await cap.plugins.PiP.isSupported();
@@ -30,6 +31,7 @@ export async function isPiPSupported(): Promise<boolean> {
  */
 export async function enterPiP(aspectW = 16, aspectH = 9): Promise<void> {
   try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const cap = (window as Record<string, any>).Capacitor;
     if (cap?.plugins?.PiP?.enter) {
       await cap.plugins.PiP.enter({ aspectW, aspectH });

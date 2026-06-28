@@ -21,7 +21,7 @@ export default function SplashScreen() {
       <div className="splash-logo">
         <i className="fas fa-cross"></i>
       </div>
-      <div className="splash-brand">Turningpoint Church Nakuru</div>
+      <div className="splash-brand">Kingdom Seekers Church Nakuru</div>
       <div className="splash-tagline">Your Church, Everywhere</div>
       <div className="splash-loader"></div>
     </div>

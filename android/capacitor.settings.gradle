@@ -56,5 +56,8 @@ project(':capacitor-status-bar').projectDir = new File('../node_modules/@capacit
 include ':capgo-capacitor-youtube-player'
 project(':capgo-capacitor-youtube-player').projectDir = new File('../node_modules/@capgo/capacitor-youtube-player/android')
 
+include ':capacitor-music-controls-plugin'
+project(':capacitor-music-controls-plugin').projectDir = new File('../node_modules/capacitor-music-controls-plugin/android')
+
 include ':capacitor-native-biometric'
 project(':capacitor-native-biometric').projectDir = new File('../node_modules/capacitor-native-biometric/android')

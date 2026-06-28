@@ -18,7 +18,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const pathnameRef = useRef(pathname);
-  pathnameRef.current = pathname;
+  useEffect(() => { pathnameRef.current = pathname; }, [pathname]);
   const { setUser, setUserDoc, setChurchConfig, setLoading, isLoading } =
     useAppStore();
 
@@ -26,7 +26,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Used to distinguish "initial load (no user)" from "transient null during token refresh".
   const hasHadUserRef = useRef(false);
   const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastNavTimeRef = useRef(Date.now());
+  const lastNavTimeRef = useRef(0);
+  useEffect(() => { lastNavTimeRef.current = Date.now(); }, []);
 
   // Track navigation timestamps to detect client-side route changes
   // that may cause Firebase to briefly emit null (token refresh race).

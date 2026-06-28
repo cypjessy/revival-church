@@ -33,7 +33,7 @@ export default function AdminMembersPage() {
     }
   }, []);
 
-  useEffect(() => { loadPage(); }, [loadPage]);
+  useEffect(() => { setTimeout(() => loadPage(), 0); }, [loadPage]);
 
   const loadMore = async () => {
     if (lastDoc) await loadPage(lastDoc);

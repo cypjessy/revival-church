@@ -256,6 +256,7 @@ const FALLBACK_SETTINGS: StationSettings = {
 // API FUNCTIONS
 // ============================================================
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mapNowPlaying(raw: any): NowPlayingData {
   const rawListenUrl = raw.station?.listen_url || "";
   return {
@@ -286,6 +287,7 @@ function mapNowPlaying(raw: any): NowPlayingData {
       isLive: raw.live?.is_live ?? false,
       streamerName: raw.live?.streamer_name || null,
     },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     songHistory: (raw.song_history || []).map((h: any) => ({
       song: {
         title: h.song?.title || "",
@@ -300,6 +302,7 @@ function mapNowPlaying(raw: any): NowPlayingData {
   };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mapStreamer(raw: any): Streamer {
   return {
     id: String(raw.id || ""),
@@ -314,6 +317,7 @@ function mapStreamer(raw: any): Streamer {
 export async function getNowPlaying(
   stationId: string
 ): Promise<NowPlayingData> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any>(`/nowplaying/${stationId}`);
   if (result.ok && result.data) {
     return mapNowPlaying(result.data);
@@ -322,7 +326,6 @@ export async function getNowPlaying(
 }
 
 export async function getStations(): Promise<Station[]> {
-  // Return a single station derived from env vars — no multi-station API call
   const embedUrl = getPublicPlayerUrl();
   const shortcode = getStationShortcode();
   const stationId = Number(getStationId()) || 0;
@@ -354,8 +357,10 @@ export function getStationEmbedUrl(station: Station): string {
 }
 
 export async function getQueue(): Promise<QueueItem[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any[]>(`/station/${STATION_ID}/queue`);
   if (result.ok && Array.isArray(result.data)) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return result.data.map((item: any) => ({
       song: {
         title: item.song?.title || "",
@@ -370,6 +375,7 @@ export async function getQueue(): Promise<QueueItem[]> {
   return [];
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mapStationStatus(raw: any): StationStatus {
   return {
     backendRunning: raw.backend_running ?? raw.backendRunning ?? false,
@@ -380,6 +386,7 @@ function mapStationStatus(raw: any): StationStatus {
 export async function getStationStatus(
   stationId: string
 ): Promise<StationStatus> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any>(
     `/station/${stationId}/status`
   );
@@ -392,10 +399,10 @@ export async function getStationStatus(
 let _savedEnabledPlaylistIds: string[] | null = null;
 
 export async function toggleAutoDJ(): Promise<{ running: boolean }> {
-  // Try backend endpoint first (may not work on all AzuraCast versions)
   const status = await getStationStatus(STATION_ID);
   const isRunning = status.backendRunning;
   const action = isRunning ? "off" : "on";
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any>(
     `/station/${STATION_ID}/backend`,
     {
@@ -408,6 +415,7 @@ export async function toggleAutoDJ(): Promise<{ running: boolean }> {
   }
 
   // Fallback: toggle playlists on/off (backend endpoint returned 405 or similar)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const plResult = await apiFetch<any[]>(`/station/${STATION_ID}/playlists`);
   if (!plResult.ok || !Array.isArray(plResult.data)) {
     return { running: isRunning };
@@ -416,7 +424,9 @@ export async function toggleAutoDJ(): Promise<{ running: boolean }> {
   if (isRunning) {
     // PAUSE: save which playlists are enabled, then disable all
     _savedEnabledPlaylistIds = plResult.data
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .filter((p: any) => p.is_enabled)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .map((p: any) => String(p.id));
     for (const id of _savedEnabledPlaylistIds) {
       await apiFetch(`/station/${STATION_ID}/playlist/${id}/toggle`, { method: "PUT" }).catch(() => {});
@@ -424,6 +434,7 @@ export async function toggleAutoDJ(): Promise<{ running: boolean }> {
     return { running: false };
   } else {
     // RESUME: restore previously-enabled playlists
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const idsToRestore = _savedEnabledPlaylistIds || plResult.data.map((p: any) => String(p.id));
     _savedEnabledPlaylistIds = null;
     for (const id of idsToRestore) {
@@ -433,6 +444,7 @@ export async function toggleAutoDJ(): Promise<{ running: boolean }> {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mapStationFile(raw: any): StationFile {
   const media = raw.media || raw;
   return {
@@ -446,16 +458,20 @@ function mapStationFile(raw: any): StationFile {
     path: media.path || raw.path || "",
     size: "",
     albumArt: media.art || "",
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     playlists: (media.playlists || []).map((p: any) => String(p.id)),
   };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mapPlaylist(raw: any): Playlist {
   let schedule: Playlist["schedule"];
   if (raw.schedule_items?.length > 0) {
     const days = [...new Set(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (raw.schedule_items.flatMap((s: any) => s.days ?? []) as number[]).map(Number)
     )];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const fmtTime = (val: any): string => {
       if (val == null) return "00:00";
       const n = Number(val);
@@ -484,6 +500,7 @@ function mapPlaylist(raw: any): Playlist {
 }
 
 export async function getStationFiles(): Promise<StationFile[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any[]>(`/station/${STATION_ID}/files`);
   if (result.ok && Array.isArray(result.data)) {
     return result.data.map(mapStationFile);
@@ -509,7 +526,7 @@ export async function deleteFile(fileId: string): Promise<boolean> {
 
 export async function updateFileMetadata(
   fileId: string,
-  data: Record<string, any>
+  data: Record<string, unknown>
 ): Promise<boolean> {
   const result = await apiFetch(`/station/${STATION_ID}/file/${fileId}`, {
     method: "PUT",
@@ -546,6 +563,7 @@ export async function uploadFile(
 }
 
 export async function getPlaylists(): Promise<Playlist[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any[]>(`/station/${STATION_ID}/playlists`);
   if (result.ok && Array.isArray(result.data)) {
     return result.data.map(mapPlaylist);
@@ -554,6 +572,7 @@ export async function getPlaylists(): Promise<Playlist[]> {
 }
 
 export async function getStationPlaylists(stationId: string): Promise<Playlist[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any[]>(`/station/${stationId}/playlists`);
   if (result.ok && Array.isArray(result.data)) {
     return result.data.map(mapPlaylist);
@@ -562,6 +581,7 @@ export async function getStationPlaylists(stationId: string): Promise<Playlist[]
 }
 
 export async function getPlaylistSongs(playlistId: string): Promise<StationFile[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any[]>(
     `/station/${STATION_ID}/files/list?searchPhrase=playlist:${playlistId}`
   );
@@ -575,7 +595,7 @@ export async function createPlaylist(
   data: Partial<Playlist>
 ): Promise<Playlist> {
   const mappedType = data.type === "standard" ? "default" : (data.type || "default");
-  const body: Record<string, any> = {
+  const body: Record<string, unknown> = {
     name: data.name || "New Playlist",
     type: mappedType,
     source: "songs",
@@ -595,6 +615,7 @@ export async function createPlaylist(
       end_time: eh * 60 + (em || 0),
     }];
   }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any>(`/station/${STATION_ID}/playlists`, {
     method: "POST",
     body: JSON.stringify(body),
@@ -604,6 +625,7 @@ export async function createPlaylist(
   }
   const plId = result.data.id;
   if (plId) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const refreshed = await apiFetch<any>(`/station/${STATION_ID}/playlist/${plId}`);
     if (refreshed.ok && refreshed.data) {
       const mapped = mapPlaylist(refreshed.data);
@@ -624,6 +646,7 @@ export async function createPlaylist(
           }],
         }),
       });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const reRefreshed = await apiFetch<any>(`/station/${STATION_ID}/playlist/${plId}`);
       if (reRefreshed.ok && reRefreshed.data) {
         return mapPlaylist(reRefreshed.data);
@@ -634,6 +657,7 @@ export async function createPlaylist(
 }
 
 export async function togglePlaylistEnabled(id: string): Promise<Playlist> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any>(
     `/station/${STATION_ID}/playlist/${id}/toggle`,
     { method: "PUT" }
@@ -641,6 +665,7 @@ export async function togglePlaylistEnabled(id: string): Promise<Playlist> {
   if (!result.ok) {
     throw new Error("Failed to toggle playlist");
   }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const refreshed = await apiFetch<any>(
     `/station/${STATION_ID}/playlist/${id}`
   );
@@ -654,7 +679,7 @@ export async function updatePlaylist(
   id: string,
   data: Partial<Playlist>
 ): Promise<Playlist> {
-  const body: Record<string, any> = {};
+  const body: Record<string, unknown> = {};
   if (data.name !== undefined) body.name = data.name;
   if (data.order !== undefined) body.order = data.order;
   if (data.weight !== undefined) body.weight = data.weight;
@@ -677,6 +702,7 @@ export async function updatePlaylist(
       body.schedule_items = [];
     }
   }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any>(
     `/station/${STATION_ID}/playlist/${id}`,
     { method: "PUT", body: JSON.stringify(body) }
@@ -700,8 +726,10 @@ export async function addSongsToPlaylist(
   const plId = parseInt(playlistId);
   let allOk = true;
   for (const songId of songIds) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const fileResult = await apiFetch<any>(`/station/${STATION_ID}/file/${songId}`);
     if (!fileResult.ok) { allOk = false; continue; }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const currentIds: number[] = (fileResult.data?.playlists || []).map((p: any) => Number(p.id ?? p));
     if (!currentIds.includes(plId)) currentIds.push(plId);
     const putResult = await apiFetch(`/station/${STATION_ID}/file/${songId}`, {
@@ -721,8 +749,10 @@ export async function removeSongFromPlaylist(
   const songIds = Array.isArray(songIdOrIds) ? songIdOrIds : [songIdOrIds];
   let allOk = true;
   for (const songId of songIds) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const fileResult = await apiFetch<any>(`/station/${STATION_ID}/file/${songId}`);
     if (!fileResult.ok) { allOk = false; continue; }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const currentIds: number[] = (fileResult.data?.playlists || []).map((p: any) => Number(p.id ?? p));
     const newIds = currentIds.filter((id: number) => id !== plId);
     const putResult = await apiFetch(`/station/${STATION_ID}/file/${songId}`, {
@@ -735,6 +765,7 @@ export async function removeSongFromPlaylist(
 }
 
 export async function getStreamers(): Promise<Streamer[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any>(`/station/${STATION_ID}/streamers`);
   if (result.ok && Array.isArray(result.data)) {
     return result.data.map(mapStreamer);
@@ -747,6 +778,7 @@ export async function createStreamer(data: {
   username: string;
   password: string;
 }): Promise<Streamer> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any>(`/station/${STATION_ID}/streamers`, {
     method: "POST",
     body: JSON.stringify({
@@ -765,6 +797,7 @@ export async function updateStreamer(
   id: string,
   data: Partial<Streamer>
 ): Promise<Streamer> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any>(`/station/${STATION_ID}/streamers/${id}`, {
     method: "PUT",
     body: JSON.stringify({
@@ -795,10 +828,12 @@ export async function getAnalytics(): Promise<AnalyticsReport> {
 }
 
 export async function getSongHistory(limit = 50): Promise<SongHistoryItem[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any[]>(`/station/${STATION_ID}/history`, {
     cache: "no-store",
   });
   if (result.ok && Array.isArray(result.data)) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return result.data.slice(0, limit).map((h: any) => ({
       song: {
         title: h.song?.title || "Unknown",
@@ -814,7 +849,9 @@ export async function getSongHistory(limit = 50): Promise<SongHistoryItem[]> {
   return [];
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function getListenerDetails(): Promise<any[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any[]>(`/station/${STATION_ID}/listeners`);
   if (result.ok && Array.isArray(result.data)) {
     return result.data;
@@ -822,6 +859,7 @@ export async function getListenerDetails(): Promise<any[]> {
   return [];
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mapWebhook(raw: any): Webhook {
   const config = raw.config || {};
   return {
@@ -835,6 +873,7 @@ function mapWebhook(raw: any): Webhook {
 }
 
 export async function getWebhooks(): Promise<Webhook[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any[]>(`/station/${STATION_ID}/webhooks`);
   if (result.ok && Array.isArray(result.data)) {
     return result.data.map(mapWebhook);
@@ -845,12 +884,13 @@ export async function getWebhooks(): Promise<Webhook[]> {
 export async function createWebhook(
   data: Partial<Webhook>
 ): Promise<Webhook> {
-  const body: Record<string, any> = {
+  const body: Record<string, unknown> = {
     webhook_url: data.url || "",
     triggers: data.events || [],
     type: "generic",
   };
   if (data.name) body.name = data.name;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any>(`/station/${STATION_ID}/webhooks`, {
     method: "POST",
     body: JSON.stringify(body),
@@ -865,11 +905,12 @@ export async function updateWebhook(
   id: string,
   data: Partial<Webhook>
 ): Promise<Webhook> {
-  const body: Record<string, any> = {};
+  const body: Record<string, unknown> = {};
   if (data.url !== undefined) body.webhook_url = data.url;
   if (data.events !== undefined) body.triggers = data.events;
   if (data.enabled !== undefined) body.is_enabled = data.enabled;
   if (data.name !== undefined) body.name = data.name;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any>(`/station/${STATION_ID}/webhook/${id}`, {
     method: "PUT",
     body: JSON.stringify(body),
@@ -889,6 +930,7 @@ export async function deleteWebhook(id: string): Promise<void> {
 export async function testWebhook(
   id: string
 ): Promise<{ success: boolean }> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any>(`/station/${STATION_ID}/webhook/${id}/test`, {
     method: "PUT",
   });
@@ -896,6 +938,7 @@ export async function testWebhook(
 }
 
 export async function toggleWebhook(id: string): Promise<Webhook> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any>(`/station/${STATION_ID}/webhook/${id}/toggle`, {
     method: "PUT",
   });
@@ -906,7 +949,9 @@ export async function toggleWebhook(id: string): Promise<Webhook> {
 }
 
 export async function getSettings(): Promise<StationSettings> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const stationResult = await apiFetch<any>(`/station/${STATION_ID}`);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const adminResult = await apiFetch<any>(`/admin/station/${STATION_ID}`);
   if (stationResult.ok && stationResult.data) {
     const s = stationResult.data;
@@ -929,9 +974,10 @@ export async function getSettings(): Promise<StationSettings> {
 export async function updateSettings(
   data: Partial<StationSettings>
 ): Promise<StationSettings> {
-  const body: Record<string, any> = {};
+  const body: Record<string, unknown> = {};
   if (data.name !== undefined) body.name = data.name;
   if (data.publicPageVisible !== undefined) body.enable_public_page = data.publicPageVisible;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await apiFetch<any>(
     `/admin/station/${STATION_ID}`,
     { method: "PUT", body: JSON.stringify(body) }
@@ -942,6 +988,5 @@ export async function updateSettings(
   }
   throw new Error("Failed to update settings");
 }
-
 
 
