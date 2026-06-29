@@ -83,6 +83,23 @@ export function generateRoomName(meetingId: string): string {
   return `meeting-${meetingId}`;
 }
 
+/** Mute a participant's audio track(s) via the server API */
+export async function muteParticipant(
+  roomName: string,
+  identity: string,
+  trackSid?: string
+): Promise<void> {
+  const res = await fetch("/api/livekit/mute", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ roomName, identity, trackSid: trackSid || null }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { error?: string }).error || "Failed to mute participant");
+  }
+}
+
 /** Get the LiveKit server URL from env */
 export function getLiveKitUrl(): string {
   try {

@@ -4,9 +4,9 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import ToastBridge from "@/components/dashboard/ToastBridge";
 import { useAppStore } from "@/lib/useAppStore";
-import { getMeeting, updateMeeting, generateLiveKitToken } from "@/lib/meetings";
+import { getMeeting, updateMeeting, generateLiveKitToken, muteParticipant } from "@/lib/meetings";
 import type { Meeting } from "@/lib/meetings";
-import { Room, RoomEvent } from "livekit-client";
+import { Room, RoomEvent, Track } from "livekit-client";
 
 export default function AdminMeetingHostPage() {
   const router = useRouter();
@@ -22,8 +22,11 @@ export default function AdminMeetingHostPage() {
   const [participants, setParticipants] = useState<string[]>([]);
   const [speakingParticipants, setSpeakingParticipants] = useState<Set<string>>(new Set());
   const [elapsed, setElapsed] = useState(0);
+  const [audioParticipants, setAudioParticipants] = useState<Map<string, string[]>>(new Map()); // identity → trackSid[]
+  const [muteloading, setMuteloading] = useState<Set<string>>(new Set());
   const roomRef = useRef<Room | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const meetingRef = useRef<Meeting | null>(null);
 
   const identity = userDoc?.uid || user?.uid || `admin-${Date.now()}`;
 
@@ -73,6 +76,7 @@ export default function AdminMeetingHostPage() {
 
       room.on(RoomEvent.ParticipantDisconnected, (p) => {
         setParticipants((prev) => prev.filter((n) => n !== p.identity));
+        setAudioParticipants((prev) => { const next = new Map(prev); next.delete(p.identity); return next; });
       });
 
       room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
@@ -85,18 +89,65 @@ export default function AdminMeetingHostPage() {
         setSpeakingParticipants(speakingNames);
       });
 
+      room.on(RoomEvent.TrackPublished, (trackPub, p) => {
+        if (trackPub.kind === Track.Kind.Audio && p.identity !== identity) {
+          setAudioParticipants((prev) => {
+            const next = new Map(prev);
+            const tids = next.get(p.identity) || [];
+            if (!tids.includes(trackPub.trackSid)) {
+              next.set(p.identity, [...tids, trackPub.trackSid]);
+            }
+            return next;
+          });
+        }
+      });
+
+      room.on(RoomEvent.TrackUnpublished, (trackPub, p) => {
+        if (trackPub.kind === Track.Kind.Audio && p.identity !== identity) {
+          setAudioParticipants((prev) => {
+            const next = new Map(prev);
+            const tids = (next.get(p.identity) || []).filter((s) => s !== trackPub.trackSid);
+            if (tids.length > 0) {
+              next.set(p.identity, tids);
+            } else {
+              next.delete(p.identity);
+            }
+            return next;
+          });
+        }
+      });
+
       room.on(RoomEvent.Disconnected, () => {
         setConnected(false);
         setParticipants([]);
         setSpeakingParticipants(new Set());
+        setAudioParticipants(new Map());
         roomRef.current = null;
         if (timerRef.current) clearInterval(timerRef.current);
       });
 
       await room.connect(url, token);
+
+      // Scan existing participants for audio tracks
+      for (const [, p] of room.remoteParticipants) {
+        const audioTracks: string[] = [];
+        for (const [, pub] of p.trackPublications) {
+          if (pub.kind === Track.Kind.Audio && pub.trackSid) {
+            audioTracks.push(pub.trackSid);
+          }
+        }
+        if (audioTracks.length > 0) {
+          setAudioParticipants((prev) => {
+            const next = new Map(prev);
+            next.set(p.identity, audioTracks);
+            return next;
+          });
+        }
+      }
       await room.localParticipant.setMicrophoneEnabled(true);
 
       roomRef.current = room;
+      meetingRef.current = m;
       setConnected(true);
       setConnecting(false);
       setLoading(false);
@@ -117,6 +168,37 @@ export default function AdminMeetingHostPage() {
       showToast("Connection Failed", e instanceof Error ? e.message : "Could not connect", "error", 4000);
       setConnecting(false);
       setLoading(false);
+    }
+  };
+
+  const handleMuteParticipant = async (pIdentity: string) => {
+    const roomName = meetingRef.current?.roomName;
+    if (!roomName) return;
+    setMuteloading((prev) => new Set(prev).add(pIdentity));
+    try {
+      await muteParticipant(roomName, pIdentity);
+      setAudioParticipants((prev) => { const n = new Map(prev); n.delete(pIdentity); return n; });
+      showToast("Muted", `${pIdentity} microphone closed`, "info", 2500);
+    } catch (e) {
+      showToast("Error", e instanceof Error ? e.message : "Failed to mute", "error", 3000);
+    } finally {
+      setMuteloading((prev) => { const n = new Set(prev); n.delete(pIdentity); return n; });
+    }
+  };
+
+  const handleMuteAll = async () => {
+    const roomName = meetingRef.current?.roomName;
+    if (!roomName || audioParticipants.size === 0) return;
+    const all = Array.from(audioParticipants.keys());
+    setMuteloading((prev) => new Set([...prev, ...all]));
+    try {
+      await Promise.all(all.map((id) => muteParticipant(roomName, id)));
+      setAudioParticipants(new Map());
+      showToast("Muted All", "All microphones closed", "success", 2500);
+    } catch (e) {
+      showToast("Error", e instanceof Error ? e.message : "Failed to mute all", "error", 3000);
+    } finally {
+      setMuteloading(new Set());
     }
   };
 
@@ -787,10 +869,28 @@ export default function AdminMeetingHostPage() {
             <div className="participants-section">
               <div className="participants-header">
                 <span className="participants-title">In the room</span>
-                <span className="participants-count">
-                  <i className="fas fa-user" style={{ marginRight: 4, fontSize: 10 }}></i>
-                  {participants.length + 1}
-                </span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {audioParticipants.size > 0 && (
+                    <button onClick={handleMuteAll} disabled={muteloading.size > 0}
+                      style={{
+                        padding: "4px 10px", borderRadius: 6, border: "none",
+                        background: "rgba(255,107,107,0.15)", color: "#FF6B6B",
+                        fontSize: 11, fontWeight: 600, cursor: "pointer",
+                        display: "flex", alignItems: "center", gap: 4,
+                      }}>
+                      {muteloading.size > 0 ? (
+                        <i className="fas fa-spinner fa-spin" style={{ fontSize: 10 }}></i>
+                      ) : (
+                        <i className="fas fa-microphone-slash" style={{ fontSize: 10 }}></i>
+                      )}
+                      Mute All ({audioParticipants.size})
+                    </button>
+                  )}
+                  <span className="participants-count">
+                    <i className="fas fa-user" style={{ marginRight: 4, fontSize: 10 }}></i>
+                    {participants.length + 1}
+                  </span>
+                </div>
               </div>
 
               <div className="participants-grid">
@@ -827,7 +927,7 @@ export default function AdminMeetingHostPage() {
                       <div className="participant-info">
                         <div className="participant-name">{p}</div>
                         <div className="participant-role">
-                          {speakingParticipants.has(p) ? "Speaking" : "Listen-only"}
+                          {speakingParticipants.has(p) ? "Speaking" : audioParticipants.has(p) ? "Unmuted" : "Listen-only"}
                         </div>
                       </div>
                       <div className="participant-status">
@@ -835,6 +935,24 @@ export default function AdminMeetingHostPage() {
                           <div className="speaking-wave">
                             <span></span><span></span><span></span><span></span>
                           </div>
+                        ) : audioParticipants.has(p) ? (
+                          <button
+                            onClick={() => handleMuteParticipant(p)}
+                            disabled={muteloading.has(p)}
+                            style={{
+                              width: 32, height: 32, borderRadius: "50%", border: "none",
+                              background: "rgba(255,107,107,0.15)", color: "#FF6B6B",
+                              fontSize: 12, cursor: "pointer", display: "flex",
+                              alignItems: "center", justifyContent: "center",
+                            }}
+                            title="Close microphone"
+                          >
+                            {muteloading.has(p) ? (
+                              <i className="fas fa-spinner fa-spin"></i>
+                            ) : (
+                              <i className="fas fa-microphone"></i>
+                            )}
+                          </button>
                         ) : (
                           <div className="muted-icon" title="Muted">
                             <i className="fas fa-microphone-slash"></i>
@@ -860,9 +978,29 @@ export default function AdminMeetingHostPage() {
                 <span>{formatElapsed(elapsed)}</span>
               </div>
             </div>
-            <button className="ctrl-btn end-call" onClick={endCall} title="End Meeting">
-              <i className="fas fa-phone-slash"></i>
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              {audioParticipants.size > 0 && (
+                <button onClick={handleMuteAll} disabled={muteloading.size > 0}
+                  style={{
+                    width: 52, height: 52, borderRadius: "50%", border: "none",
+                    background: "rgba(255,107,107,0.12)", color: "#FF6B6B",
+                    fontSize: 18, cursor: "pointer", display: "flex",
+                    alignItems: "center", justifyContent: "center",
+                    transition: "all 0.2s ease",
+                  }}
+                  title="Close all microphones"
+                >
+                  {muteloading.size > 0 ? (
+                    <i className="fas fa-spinner fa-spin"></i>
+                  ) : (
+                    <i className="fas fa-microphone-slash"></i>
+                  )}
+                </button>
+              )}
+              <button className="ctrl-btn end-call" onClick={endCall} title="End Meeting">
+                <i className="fas fa-phone-slash"></i>
+              </button>
+            </div>
           </div>
         </div>
       </div>
