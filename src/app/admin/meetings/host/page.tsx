@@ -137,6 +137,19 @@ export default function AdminMeetingHostPage() {
 
       await room.connect(url, token);
 
+      // Start audio context for remote track playback (best-effort for desktop)
+      room.startAudio().catch(() => {});
+
+      // On mobile/Android WebView, audio autoplay is blocked until a user gesture.
+      // Set up a one-tap handler to resume AudioContext on first interaction.
+      const startAudioOnce = () => {
+        room.startAudio().catch(() => {});
+        document.removeEventListener('click', startAudioOnce);
+        document.removeEventListener('touchstart', startAudioOnce);
+      };
+      document.addEventListener('click', startAudioOnce, { once: true });
+      document.addEventListener('touchstart', startAudioOnce, { once: true });
+
       // Scan existing participants for audio tracks
       for (const [, p] of room.remoteParticipants) {
         const audioTracks: string[] = [];
@@ -153,15 +166,6 @@ export default function AdminMeetingHostPage() {
           });
         }
       }
-      // On mobile/Android WebView, audio autoplay and getUserMedia require a user gesture.
-      // Set up a one-tap handler to resume AudioContext on first interaction.
-      const startAudioOnce = () => {
-        room.startAudio().catch(() => {});
-        document.removeEventListener('click', startAudioOnce);
-        document.removeEventListener('touchstart', startAudioOnce);
-      };
-      document.addEventListener('click', startAudioOnce, { once: true });
-      document.addEventListener('touchstart', startAudioOnce, { once: true });
 
       // Don't auto-enable mic — on Android WebView getUserMedia requires a user gesture.
       // Admin taps the mic button to enable speaking (user gesture triggers mic permission).
