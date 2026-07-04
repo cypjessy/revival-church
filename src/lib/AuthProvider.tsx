@@ -11,8 +11,8 @@ import { churchConfig } from "@/lib/churchConfig";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
 
 const PUBLIC_PATHS = ["/", "/login"];
-// Watch/video pages are public — content is the same for all members
-const PUBLIC_PATH_PREFIXES = ["/admin", "/watch"];
+// Watch/video pages have been removed — all pages now require auth
+const PUBLIC_PATH_PREFIXES = ["/admin"];
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();

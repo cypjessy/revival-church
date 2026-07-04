@@ -10,14 +10,10 @@ import BottomNavBar from "@/components/shared/BottomNavBar";
 import { doc, updateDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import ToastBridge from "@/components/dashboard/ToastBridge";
-import { useGlobalVideoPlayer } from "@/lib/video/VideoPlayerProvider";
 import { useImageLightbox } from "@/components/shared/ImageLightbox";
 import { getNowPlaying, getSongHistory, getStationId, getPlaylists } from "@/lib/azuracast";
-import { getVideosPage, getSeries } from "@/lib/youtube";
 import { getAlbums } from "@/lib/albums";
 import { getAllAlbumEntries } from "@/lib/albumEntries";
-import type { YouTubeVideo, YouTubeSeries } from "@/lib/youtube";
-import { useYouTubeLive } from "@/hooks/useYouTubeLive";
 import { useAudio } from "@/lib/audio/AudioContext";
 import type { NowPlayingData, SongHistoryItem, Playlist } from "@/lib/azuracast";
 import type { Album } from "@/lib/albums";
@@ -390,10 +386,7 @@ export default function DashboardPage() {
   const [listeners, setListeners] = useState(0);
   const [npData, setNpData] = useState<NowPlayingData | null>(null);
   const [songHistory, setSongHistory] = useState<SongHistoryItem[]>([]);
-  const [videos, setVideos] = useState<YouTubeVideo[]>([]);
-  const [seriesList, setSeriesList] = useState<YouTubeSeries[]>([]);
   const [radioLoading, setRadioLoading] = useState(true);
-  const [videoLoading, setVideoLoading] = useState(true);
   const [albums, setAlbums] = useState<Album[]>([]);
   const [entries, setEntries] = useState<AlbumEntry[]>([]);
   const [galleryLoading, setGalleryLoading] = useState(true);
@@ -408,9 +401,7 @@ export default function DashboardPage() {
     return () => clearTimeout(timer);
   }, []);
 
-  const globalPlayer = useGlobalVideoPlayer();
   const imageViewer = useImageLightbox();
-  const ytLive = useYouTubeLive();
   const audio = useAudio();
 
   // Music controls plugin disabled due to native crash on Android
@@ -491,22 +482,17 @@ export default function DashboardPage() {
     return () => { mounted = false; clearInterval(interval); };
   }, []);
 
-  /* Fetch videos, series, albums, and entries from Firestore on mount */
+  /* Fetch albums and entries from Firestore on mount */
   useEffect(() => {
     let mounted = true;
     const fetchData = async () => {
-      const [page, series, albumList, entryList] = await Promise.all([
-        getVideosPage(12).catch(() => ({ videos: [] as YouTubeVideo[], lastDoc: null })),
-        getSeries().catch(() => [] as YouTubeSeries[]),
+      const [albumList, entryList] = await Promise.all([
         getAlbums().catch(() => [] as Album[]),
         getAllAlbumEntries().catch(() => [] as AlbumEntry[]),
       ]);
       if (!mounted) return;
-      setVideos(page.videos);
-      setSeriesList(series);
       setAlbums(albumList);
       setEntries(entryList);
-      setVideoLoading(false);
       // Build initial random gallery indices
       const valid = albumList.filter((a) => a.photoCount > 0 || entryList.some((e) => e.albumId === a.id));
       const usedIndices = valid.map(() => Math.floor(Math.random() * 12));
@@ -576,9 +562,6 @@ export default function DashboardPage() {
     const streamerName = npData?.live?.streamerName;
     const stationName = npData?.station?.name || church.name;
     const progressPct = np && np.duration > 0 ? Math.round((np.elapsed / np.duration) * 100) : 0;
-    const featuredVideo = videos.find((v) => v.isFeatured) || videos[0];
-    const latestVideos = videos.filter((v) => !v.isFeatured).slice(0, 8);
-
     return (
     <>
       {/* LIVE BANNER — Radio */}
@@ -596,26 +579,6 @@ export default function DashboardPage() {
             </div>
           </div>              <button className="live-banner-btn" onClick={() => { setIsPlaying(true); router.push("/radio"); }}>
             <i className="fas fa-play"></i> Tune In Now
-          </button>
-        </div>
-      )}
-
-      {/* LIVE BANNER — YouTube */}
-      {ytLive.status.isLive && (
-        <div className="live-banner" style={{ borderLeftColor: "#FF0000" }} onClick={() => router.push("/watch")}>
-          <div className="live-banner-left">
-            <div className="live-banner-dot" style={{ background: "#FF0000" }}></div>
-            <div className="live-banner-info">
-              <div className="live-banner-title">
-                {ytLive.status.video?.title || "YouTube Live"}
-              </div>
-              <div className="live-banner-sub">
-                YouTube Live · Watch now
-              </div>
-            </div>
-          </div>
-          <button className="live-banner-btn" onClick={(e) => { e.stopPropagation(); router.push("/watch"); }}>
-            <i className="fas fa-play"></i> Watch Now
           </button>
         </div>
       )}
@@ -750,101 +713,6 @@ export default function DashboardPage() {
             </div>
             );
           })}
-        </div>
-      </section>
-      )}
-
-      {/* FEATURED VIDEO — from Firestore */}
-      {!videoLoading && featuredVideo && (
-      <section className="feed-section">
-        <div className="section-header-inline">
-          <h2 className="section-title">Featured Video</h2>
-              <button className="section-link" onClick={() => router.push("/watch")}>See All Videos <i className="fas fa-chevron-right"></i></button>
-        </div>
-        <div className="fv-card" onClick={() => globalPlayer.play(featuredVideo.youtubeId)}>
-          <div className="fv-thumb">
-            <div className="fv-thumb-glow"></div>
-            <img src={featuredVideo.thumbnail} alt="" />
-            <div className="fv-top-badge">
-              <span className={`fv-cat-dot ${featuredVideo.category}`}></span>
-              {featuredVideo.category}
-            </div>
-            <div className="fv-duration">{featuredVideo.duration}</div>
-            <div className="fv-play-overlay">
-              <div className="fv-play-btn">
-                <i className="fas fa-play"></i>
-              </div>
-            </div>
-          </div>
-          <div className="fv-body">
-            <div className="fv-title">{featuredVideo.title}</div>
-            <div className="fv-meta-row">
-              <div className="fv-meta-item">
-                <i className="fas fa-calendar"></i>
-                {new Date(featuredVideo.publishedAt).toLocaleDateString()}
-              </div>
-              <div className="fv-meta-item">
-                <i className="fas fa-eye"></i>
-                {featuredVideo.views?.toLocaleString() || 0} views
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-      )}
-
-      {/* SERMON SERIES — from Firestore */}
-      {!videoLoading && seriesList.length > 0 && (
-      <section className="feed-section">
-        <div className="section-header-inline">
-          <h2 className="section-title">Sermon Series</h2>
-          <button className="section-link" onClick={() => router.push("/watch")}>Browse All Series <i className="fas fa-chevron-right"></i></button>
-        </div>
-        <div className="h-scroll">
-          {seriesList.map((s, i) => (
-            <div className="sc-card" key={s.id || i} onClick={() => router.push("/watch")}>
-              <div className="sc-cover">
-                {s.coverImage ? (
-                  <img src={s.coverImage} alt="" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                ) : (
-                  <div className="sc-cover-fallback"><i className="fas fa-list"></i></div>
-                )}
-                <div className="sc-count"><i className="fas fa-video"></i> {s.videoIds?.length || 0}</div>
-              </div>
-              <div className="sc-body">
-                <div className="sc-name">{s.name}</div>
-                <div className="sc-episodes">{s.videoIds?.length || 0} videos</div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-      )}
-
-      {/* LATEST VIDEOS — grid layout from Firestore */}
-      {!videoLoading && latestVideos.length > 0 && (
-      <section className="feed-section">
-        <div className="section-header-inline">
-          <h2 className="section-title">Latest Videos</h2>
-          <button className="section-link" onClick={() => router.push("/watch")}>See All <i className="fas fa-chevron-right"></i></button>
-        </div>
-        <div className="vg-grid">
-          {latestVideos.slice(0, 6).map((v) => (
-            <div className="vg-card" key={v.youtubeId} onClick={() => globalPlayer.play(v.youtubeId)}>
-              <div className="vg-thumb">
-                <img src={v.thumbnail} alt="" />
-                <div className="vg-play-icon"><i className="fas fa-play"></i></div>
-                <span className="vg-duration">{v.duration}</span>
-              </div>
-              <div className="vg-body">
-                <div className="vg-title">{v.title}</div>
-                <div className="vg-meta">
-                  <i className="fas fa-calendar"></i>
-                  {new Date(v.publishedAt).toLocaleDateString()}
-                </div>
-              </div>
-            </div>
-          ))}
         </div>
       </section>
       )}

@@ -15,7 +15,6 @@ const tabs: NavTab[] = [
   { tab: "radio", icon: "fa-tower-broadcast", label: "Radio" },
   { tab: "meetings", icon: "fa-people-group", label: "Meetings" },
   { tab: "content", icon: "fa-photo-film", label: "Content" },
-  { tab: "video", icon: "fa-video", label: "Video" },
   { tab: "members", icon: "fa-users", label: "Members", showBadge: true },
 ];
 
@@ -24,7 +23,6 @@ const tabRoutes: Record<string, string> = {
   radio: "/admin/radio",
   meetings: "/admin/meetings",
   content: "/admin/content",
-  video: "/admin/video",
   members: "/admin/members",
 };
 

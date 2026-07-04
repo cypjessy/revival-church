@@ -322,13 +322,6 @@ export default function LoginForm() {
             Create Account
           </a>
         </p>
-        <button
-          className="admin-portal-btn"
-          onClick={() => router.push("/admin")}
-        >
-          <i className="fas fa-shield-halved"></i>
-          Admin Portal
-        </button>
       </div>
     </>
   );

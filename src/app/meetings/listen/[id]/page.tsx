@@ -27,6 +27,7 @@ export default function MemberListenPage() {
   const [showInfo, setShowInfo] = useState(false);
   const roomRef = useRef<Room | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isMutedRef = useRef(true);
 
   const displayName = userDoc?.display_name || user?.displayName || user?.email?.split("@")[0] || "You";
   const identity = user?.uid || `member-${Date.now()}`;
@@ -69,6 +70,12 @@ export default function MemberListenPage() {
       const room = new Room({
         adaptiveStream: true,
         dynacast: true,
+        audioCaptureDefaults: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
       });
 
       room.on(RoomEvent.ParticipantConnected, (p) => {
@@ -113,9 +120,20 @@ export default function MemberListenPage() {
 
       await room.connect(url, token);
 
-      // Join muted (listen-only by default)
-      await room.localParticipant.setMicrophoneEnabled(false);
+      // Start audio context for remote track playback (best-effort for desktop)
+      room.startAudio().catch(() => {});
 
+      // On mobile/Android WebView, audio autoplay is blocked until a user gesture.
+      // Set up a one-tap handler to resume audio context on first interaction.
+      const startAudioOnce = () => {
+        room.startAudio().catch(() => {});
+        document.removeEventListener('click', startAudioOnce);
+        document.removeEventListener('touchstart', startAudioOnce);
+      };
+      document.addEventListener('click', startAudioOnce, { once: true });
+      document.addEventListener('touchstart', startAudioOnce, { once: true });
+
+      // Join listen-only — don't create any mic track yet
       roomRef.current = room;
       setConnected(true);
       setConnecting(false);
@@ -148,14 +166,23 @@ export default function MemberListenPage() {
   };
 
   const toggleMute = async () => {
-    if (roomRef.current) {
-      try {
-        await roomRef.current.localParticipant.setMicrophoneEnabled(isMuted);
-      } catch (e) {
-        console.error("Toggle mute failed:", e);
+    const room = roomRef.current;
+    if (!room) return;
+    try {
+      if (isMutedRef.current) {
+        // Currently muted — enable mic (creates + publishes track)
+        await room.localParticipant.setMicrophoneEnabled(true);
+      } else {
+        // Currently unmuted — disable mic
+        await room.localParticipant.setMicrophoneEnabled(false);
       }
+      isMutedRef.current = !isMutedRef.current;
+      setIsMuted(isMutedRef.current);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Could not access microphone";
+      console.error("Toggle mute failed:", e);
+      showToast("Mic Error", msg, "error", 4000);
     }
-    setIsMuted(!isMuted);
   };
 
   const formatElapsed = (seconds: number) => {

@@ -68,6 +68,12 @@ export default function AdminMeetingHostPage() {
       const room = new Room({
         adaptiveStream: true,
         dynacast: true,
+        audioCaptureDefaults: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
       });
 
       room.on(RoomEvent.ParticipantConnected, (p) => {
@@ -125,6 +131,9 @@ export default function AdminMeetingHostPage() {
         roomRef.current = null;
         if (timerRef.current) clearInterval(timerRef.current);
       });
+
+      // Ensure audio context is started (needed for mobile/Android WebView)
+      await room.startAudio().catch(() => {});
 
       await room.connect(url, token);
 

@@ -5,8 +5,7 @@ import { useRouter } from "next/navigation";
 import { signOut as firebaseSignOut } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import { useAppStore } from "@/lib/useAppStore";
-import { getYouTubeStats } from "@/lib/youtube";
-import { getNowPlaying as azuracastGetNowPlaying, getSongHistory, getStationStatus, getQueue, toggleAutoDJ, getStreamers, deleteStreamer, getPlaylists, getStationId, getApiHost } from "@/lib/azuracast";
+import { getNowPlaying as azuracastGetNowPlaying, getSongHistory, getStationStatus, getQueue, toggleAutoDJ, getStreamers, deleteStreamer, getPlaylists, getStationId } from "@/lib/azuracast";
 import type { QueueItem, Streamer, Playlist } from "@/lib/azuracast";
 import { getGalleryPhotos } from "@/lib/content";
 import { getBunnyStorageStats, formatBytes } from "@/lib/bunny";
@@ -107,76 +106,6 @@ export default function AdminPage() {
   const [chartPeriod, setChartPeriod] = useState<string>("7days");
   const [showSetup, setShowSetup] = useState(false);
 
-  // YouTube stats from Firestore
-  const [ytStats, setYtStats] = useState<{
-    subscribers: number; views: number; weeklyViews: number;
-    name: string; avatar: string; lastSynced: string;
-    channelId?: string; videoCount?: number;
-  } | null>(null);
-  const [ytSyncing, setYtSyncing] = useState(false);
-
-  // Fetch YouTube stats on mount (reads from Firestore, no API call)
-  const fetchYtStats = useCallback(async () => {
-    try {
-      const stats = await getYouTubeStats();
-      if (stats) {
-        setYtStats({
-          subscribers: stats.subscribers,
-          views: stats.views,
-          weeklyViews: stats.weeklyViews,
-          name: stats.name,
-          avatar: stats.avatar,
-          lastSynced: stats.lastSynced || "Not synced yet",
-          channelId: stats.id,
-          videoCount: stats.videoCount,
-        });
-      }
-    } catch {}
-  }, []);
-
-  useEffect(() => { setTimeout(() => fetchYtStats(), 0); }, [fetchYtStats]);
-
-  // Sync handler — calls YouTube API and re-fetches from Firestore
-  const handleYtSync = useCallback(async () => {
-    setYtSyncing(true);
-
-    // YouTube sync requires a server-side API route (YouTube API key is not public).
-    // If no API host is configured, skip with a clear message.
-    const apiHost = getApiHost();
-    if (!apiHost) {
-      window.dispatchEvent(new CustomEvent("show-toast", {
-        detail: { title: "Backend Required", message: "To sync YouTube, deploy the app to Vercel and set NEXT_PUBLIC_API_HOST in .env.local", type: "error", duration: 5000 },
-      }));
-      setYtSyncing(false);
-      return;
-    }
-
-    window.dispatchEvent(new CustomEvent("show-toast", {
-      detail: { title: "Syncing", message: "Syncing with YouTube...", type: "info", duration: 2500 },
-    }));
-    try {
-      const res = await fetch(`${apiHost}/api/youtube/sync`, { method: "POST" });
-      if (!res.ok) throw new Error("Sync failed");
-      const data = await res.json();
-      // Save channel + videos to Firestore via existing helpers (called client-side)
-      const { saveChannel, saveVideos } = await import("@/lib/youtube");
-      await Promise.all([
-        saveChannel(data.channel),
-        saveVideos(data.videos),
-      ]);
-      // Re-fetch stats from Firestore
-      await fetchYtStats();
-      window.dispatchEvent(new CustomEvent("show-toast", {
-        detail: { title: "Sync Complete", message: `Channel synced with ${data.videos.length} videos`, type: "success", duration: 3000 },
-      }));
-    } catch (e) {
-      window.dispatchEvent(new CustomEvent("show-toast", {
-        detail: { title: "Sync Failed", message: e instanceof Error ? e.message : "Unknown error", type: "error", duration: 4000 },
-      }));
-    }
-    setYtSyncing(false);
-  }, [fetchYtStats]);
-
   /* Radio real-time state (polled from AzuraCast) */
   const [radioNP, setRadioNP] = useState<import("@/lib/azuracast").NowPlayingData | null>(null);
   const [radioHistory, setRadioHistory] = useState<import("@/lib/azuracast").SongHistoryItem[]>([]);
@@ -209,19 +138,12 @@ export default function AdminPage() {
   const [storageTotal, setStorageTotal] = useState({ used: 0, total: 10 * 1024 * 1024 * 1024 });
   const [contentLoading, setContentLoading] = useState(true);
 
-  // Computed statCards using real YouTube data
+  // Stat cards (YouTube sections removed)
   interface StatCard {
     id: string; color: string; icon: string; value: string; label: string;
     trend?: string; sparkline?: number[]; colorCode: string;
     subtitle?: string; progress?: number;
   }
-  const ytSubs = ytStats?.subscribers ?? 0;
-  const ytViews = ytStats?.views ?? 0;
-  const ytWeeklyViews = ytStats?.weeklyViews ?? 0;
-  const ytName = ytStats?.name || "YouTube";
-  const ytAvatar = ytStats?.avatar || "";
-  const ytLastSynced = ytStats?.lastSynced || "";
-  const hasYtData = ytStats !== null && ytSubs > 0;
 
   const radioDeepLink = useCallback(() => {
     window.dispatchEvent(new CustomEvent("show-toast", {
@@ -267,24 +189,6 @@ export default function AdminPage() {
       label: "Songs played today",
       subtitle: radioBackendRunning ? `AutoDJ ${radioHistory.length > 0 ? "· " + radioHistory[0]?.song?.title || "" : ""}` : "Station offline",
       colorCode: "#8B5CF6",
-    },
-    {
-      id: "channelviews",
-      color: "green",
-      icon: "fa-youtube",
-      value: hasYtData ? formatNumber(ytViews) : "—",
-      label: "Total YouTube Views",
-      subtitle: hasYtData ? `+${formatNumber(ytWeeklyViews)} this week` : "Sync YouTube first",
-      colorCode: "#EF4444",
-    },
-    {
-      id: "subscribers",
-      color: "orange",
-      icon: "fa-users",
-      value: hasYtData ? formatNumber(ytSubs) : "—",
-      label: "YouTube Subscribers",
-      subtitle: hasYtData ? ytName : "Not connected",
-      colorCode: "#E8A838",
     },
   ];
 
@@ -358,15 +262,11 @@ export default function AdminPage() {
       }
       const galleryLast = latestTime > 0 ? timeAgo(new Date(latestTime)) : "Never";
 
-      // YouTube video count from existing ytStats
-      const vCount = ytStats?.videoCount || 0;
-      const vSync = ytStats?.lastSynced || "—";
-
       setContentCounts({
         gallery: galleryCount,
         galleryLast,
-        videos: vCount,
-        videoSync: vSync,
+        videos: 0,
+        videoSync: "—",
       });
 
       // Storage — get real BunnyCDN stats
@@ -391,7 +291,7 @@ export default function AdminPage() {
       // Keep default state
     }
     setContentLoading(false);
-  }, [ytStats]);
+  }, []);
 
   /* Fetch schedule from AzuraCast playlists */
   const fetchSchedule = useCallback(async () => {
@@ -2147,48 +2047,6 @@ export default function AdminPage() {
                 <a className="view-all-link" href="/admin/radio">View all {liveStreamers.length} DJs →</a>
               </div>
 
-              {/* YOUTUBE LIVE STATUS */}
-              <div className="swidget">
-                <div className="swidget-header">
-                  <div className="swidget-title">
-                    <i className="fab fa-youtube" style={{ color: "#EF4444" }}></i> YouTube
-                  </div>
-                </div>
-                <div className="yt-header">
-                  {ytAvatar ? (
-                    <img className="yt-avatar" src={ytAvatar} alt={ytName} style={{ width: 38, height: 38, borderRadius: "var(--radius-full)", objectFit: "cover" }} />
-                  ) : (
-                    <div className="yt-avatar"><i className="fab fa-youtube" style={{ color: "var(--error)", fontSize: 16 }}></i></div>
-                  )}
-                  <div className="yt-info">
-                    <div className="name">{hasYtData ? ytName : "Not Connected"}</div>
-                    <div className="sub">{hasYtData ? `${formatNumber(ytSubs)} subscribers` : "Sync your YouTube channel"}</div>
-                  </div>
-                </div>
-                {hasYtData ? (
-                  <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
-                    <div style={{ flex: 1, background: "var(--surface)", borderRadius: "var(--radius-sm)", padding: "8px 10px", textAlign: "center" }}>
-                      <div style={{ fontSize: 18, fontWeight: 800, color: "var(--success)" }}>{formatNumber(ytViews)}</div>
-                      <div style={{ fontSize: 10, color: "var(--text-tertiary)", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Total Views</div>
-                    </div>
-                    <div style={{ flex: 1, background: "var(--surface)", borderRadius: "var(--radius-sm)", padding: "8px 10px", textAlign: "center" }}>
-                      <div style={{ fontSize: 18, fontWeight: 800, color: "var(--primary)" }}>+{formatNumber(ytWeeklyViews)}</div>
-                      <div style={{ fontSize: 10, color: "var(--text-tertiary)", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>This Week</div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="yt-not-live">
-                    <p>No channel synced yet</p>
-                    <div className="next">Visit Video Management to connect</div>
-                  </div>
-                )}
-                <div className="yt-sync-row">
-                  <span>Synced {ytLastSynced || "—"}</span>
-                  <button className="sync-btn" onClick={handleYtSync} disabled={ytSyncing}>
-                    {ytSyncing ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-rotate"></i>} Sync Now
-                  </button>
-                </div>
-              </div>
 
               {/* CONTENT SUMMARY */}
               <div className="swidget">

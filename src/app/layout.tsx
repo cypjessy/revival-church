@@ -2,7 +2,6 @@ import type { Metadata, Viewport } from "next";
 import { ToastProvider } from "@/components/ui/Toast";
 import { AuthProvider } from "@/lib/AuthProvider";
 import { AudioProvider } from "@/lib/audio/AudioContext";
-import { VideoPlayerProvider } from "@/lib/video/VideoPlayerProvider";
 import { BackButtonHandler } from "@/components/shared/BackButtonHandler";
 import { RootErrorBoundary } from "@/components/shared/RootErrorBoundary";
 import "./globals.css";
@@ -54,12 +53,10 @@ export default function RootLayout({
       <body style={{ background: "#0F0F0F", margin: 0 }}>
         <AuthProvider>
           <AudioProvider>
-            <VideoPlayerProvider>
-              <ToastProvider>
+            <ToastProvider>
                 <RootErrorBoundary>{children}</RootErrorBoundary>
               </ToastProvider>
               <BackButtonHandler />
-            </VideoPlayerProvider>
           </AudioProvider>
         </AuthProvider>
       </body>

@@ -3,12 +3,10 @@
 import { useRouter } from "next/navigation";
 
 interface BottomNavProps {
-  activeTab: "home" | "radio" | "meetings" | "watch" | "gallery";
-  showWatchBadge?: boolean;
-  showLiveBadge?: boolean;
+  activeTab: "home" | "radio" | "meetings" | "gallery";
 }
 
-export default function BottomNav({ activeTab, showWatchBadge = false, showLiveBadge = false }: BottomNavProps) {
+export default function BottomNav({ activeTab }: BottomNavProps) {
   const router = useRouter();
 
   const navigate = (path: string) => {
@@ -42,15 +40,6 @@ export default function BottomNav({ activeTab, showWatchBadge = false, showLiveB
       >
         <i className="fas fa-people-group"></i>
         <span>Meetings</span>
-      </button>
-      <button
-        className={`nav-item${activeTab === "watch" ? " active" : ""}`}
-        onClick={() => navigate("/watch")}
-      >
-        <i className="fas fa-video"></i>
-        <span>Watch</span>
-        {showWatchBadge && <span className="nav-badge"></span>}
-        {showLiveBadge && <span className="nav-live-dot"></span>}
       </button>
       <button
         className={`nav-item${activeTab === "gallery" ? " active" : ""}`}

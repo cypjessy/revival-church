@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { useYouTubeLive } from "@/hooks/useYouTubeLive";
 import { useAudio } from "@/lib/audio/AudioContext";
 import BottomNavBar from "@/components/shared/BottomNavBar";
 import ToastBridge from "@/components/dashboard/ToastBridge";
@@ -43,7 +42,7 @@ export default function RadioPage() {
   const listenUrl = npData?.station?.listenUrl || `${getApiBase()}/listen/${getStationId()}/radio.mp3`;
   const embedUrl = `${getPublicPlayerUrl()}/embed`;
   const stationName = settings?.name || "Kingdom Seekers Radio";
-  const ytLive = useYouTubeLive();
+  // YouTube live indicator removed
 
   // Push now-playing metadata to Android media notification
   useEffect(() => {
@@ -674,11 +673,7 @@ export default function RadioPage() {
             <div className="listener-count">
               <i className="fas fa-headphones"></i> {currentListeners}
             </div>
-            {ytLive.status.isLive && (
-              <div className="yt-live-indicator" onClick={() => router.push("/watch")}>
-                <i className="fab fa-youtube" style={{ color: "#FF0000" }}></i> Live
-              </div>
-            )}
+// YouTube live indicator removed
           </div>
         </header>
 
@@ -973,11 +968,7 @@ export default function RadioPage() {
                       <i className="fab fa-facebook" style={{ color: "#1877F2" }}></i>
                     </button>
                   )}
-                  {(churchConfig.social.youtube_url || true) && (
-                    <button className="about-social-btn" onClick={async () => { if (churchConfig.social.youtube_url) { try { const { Browser } = await import("@capacitor/browser"); await Browser.open({ url: churchConfig.social.youtube_url }); } catch { window.open(churchConfig.social.youtube_url, "_blank"); } } }}>
-                      <i className="fab fa-youtube" style={{ color: "#FF0000" }}></i>
-                    </button>
-                  )}
+                  {/* YouTube social button removed */}
                   {(churchConfig.social.whatsapp_number || true) && (
                     <button className="about-social-btn" onClick={async () => { if (churchConfig.social.whatsapp_number) { try { const { Browser } = await import("@capacitor/browser"); await Browser.open({ url: `https://wa.me/${churchConfig.social.whatsapp_number.replace(/[^0-9]/g, "")}` }); } catch { window.open(`https://wa.me/${churchConfig.social.whatsapp_number.replace(/[^0-9]/g, "")}`, "_blank"); } } }}>
                       <i className="fab fa-whatsapp" style={{ color: "#25D366" }}></i>
@@ -994,9 +985,7 @@ export default function RadioPage() {
                   <button className="about-action-btn share" onClick={handleShare}>
                     <i className="fas fa-share-nodes"></i> Share Station
                   </button>
-                  <button className="about-action-btn" onClick={() => router.push("/watch")}>
-                    <i className="fas fa-video"></i> Browse Videos
-                  </button>
+                  {/* Browse Videos button removed */}
                 </div>
 
                 <div className="about-footer">
