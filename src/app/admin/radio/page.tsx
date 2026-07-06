@@ -25,7 +25,6 @@ import {
   deleteStreamer,
 } from "@/lib/azuracast";
 import { hapticSuccess } from "@/lib/haptics";
-import { useAudio } from "@/lib/audio/AudioContext";
 import { getRadioConfig, defaultRadioConfig } from "@/lib/radioConfig";
 import type { Playlist, StationFile, QueueItem } from "@/lib/azuracast";
 import dynamic from "next/dynamic";
@@ -55,18 +54,8 @@ export default function AdminRadioPage() {
   const [listeners, setListeners] = useState(0);
   const [overviewNP, setOverviewNP] = useState<import("@/lib/azuracast").NowPlayingData | null>(null);
 
-  // AudioContext for stream playback
-  const audio = useAudio();
-
   // Radio config from Firestore
   const [radioConfig, setRadioConfig] = useState(defaultRadioConfig());
-
-  // Sync isPlaying with AudioContext
-  useEffect(() => {
-    const streamUrl = overviewNP?.station?.listenUrl || radioConfig.streamUrl;
-    const npPlaying = audio.isPlaying && audio.currentStreamUrl === streamUrl;
-    queueMicrotask(() => setIsPlaying(npPlaying));
-  }, [audio.isPlaying, audio.currentStationId, overviewNP, radioConfig.streamUrl]);
 
   // Fetch radio config from Firestore on mount
   useEffect(() => {
@@ -80,14 +69,6 @@ export default function AdminRadioPage() {
       });
     }).catch(() => {});
   }, []);
-
-  // Push now-playing metadata to Android media notification when audio is playing
-  useEffect(() => {
-    if (audio.isPlaying && overviewNP?.nowPlaying?.song) {
-      const np = overviewNP.nowPlaying;
-      audio.updateMediaSession(np.song.title, np.song.artist, np.song.albumArt);
-    }
-  }, [audio.isPlaying, overviewNP?.nowPlaying?.song?.title, audio.updateMediaSession]);
   const [overviewHistory, setOverviewHistory] = useState<import("@/lib/azuracast").SongHistoryItem[]>([]);
   const [overviewLoading, setOverviewLoading] = useState(false);
 
@@ -278,13 +259,8 @@ export default function AdminRadioPage() {
       isPlaying={isPlaying}
       listeners={listeners}
       backendRunning={backendRunning}
-      setIsPlaying={setIsPlaying}
-      setAutoDJ={setAutoDJ}
       streamUrl={overviewNP?.station?.listenUrl || radioConfig.streamUrl}
-      onTogglePlay={() => {
-        const url = overviewNP?.station?.listenUrl || radioConfig.streamUrl;
-        if (url) audio.toggle(url, Number(radioConfig.stationId || getStationId()));
-      }}
+      setAutoDJ={setAutoDJ}
       pcMode={pcMode}
       pcQueue={pcQueue}
       pcPlaylists={pcPlaylists}
@@ -1748,100 +1724,18 @@ export default function AdminRadioPage() {
           </div>
         </header>
 
-        {/* ========== NOW PLAYING BAR ========== */}
-        {/* ===== PREMIUM RADIO HERO CARD ===== */}
-        <div className="rh-hero" style={{ margin: "8px 16px 0" }}>
-          {/* Animated background glow layers */}
-          <div className="rh-glow-1"></div>
-          <div className="rh-glow-2"></div>
-
-          {/* Top row: station name + badges */}
-          <div className="rh-top">
-            <div className="rh-station">
-              <i className="fas fa-tower-broadcast"></i>
-              <span>{overviewNP?.station?.name || radioConfig.stationName}</span>
-            </div>
-            <div className="rh-badges">
-              <div className={`rh-live-badge ${isPlaying || isLive ? "live" : "off"}`}>
-                <span className="rh-live-dot"></span>
-                {isPlaying || isLive ? "Live" : "Off Air"}
-              </div>
-              <div className="rh-listener-badge">
-                <i className="fas fa-headphones"></i>
-                {listeners}
-              </div>
-            </div>
-          </div>
-
-          {/* Main content: album art + info */}
-          <div className="rh-main">
-            <div className="rh-art-wrap">
-              <div className="rh-art-ring"></div>
-              <div className={`rh-art ${isPlaying ? "spinning" : ""}`}>
-                {overviewNP?.nowPlaying?.song?.albumArt ? (
-                  <img src={overviewNP.nowPlaying.song.albumArt} alt="" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                ) : (
-                  <div className="rh-art-fallback">
-                    <i className="fas fa-radio"></i>
-                  </div>
-                )}
-              </div>
-              {/* Equalizer overlay when playing */}
-              {isPlaying && (
-                <div className="rh-eq">
-                  <span></span><span></span><span></span><span></span>
-                </div>
-              )}
-              {/* Spinning vinyl lines when playing */}
-              {isPlaying && <div className="rh-vinyl-lines"></div>}
-            </div>
-
-            <div className="rh-info">
-              <div className="rh-track-name">{overviewNP?.nowPlaying?.song?.title || "Station Offline"}</div>
-              <div className="rh-track-artist">{overviewNP?.nowPlaying?.song?.artist || "Not currently playing"}</div>
-              <div className="rh-source">
-                <i className="fas fa-radio"></i> {overviewNP?.station?.name || "Radio"}
-              </div>
-            </div>
-          </div>
-
-          {/* Progress bar */}
-          {overviewNP?.nowPlaying && (
-          <div className="rh-progress-wrap">
-            <div className="rh-progress-bar">
-              <div className="rh-progress-fill" style={{ width: `${overviewNP.nowPlaying.duration > 0 ? Math.min(100, (overviewNP.nowPlaying.elapsed / overviewNP.nowPlaying.duration) * 100) : 0}%` }}>
-                <div className="rh-progress-glow"></div>
-              </div>
-            </div>
-            <div className="rh-progress-time">
-              <span>{overviewNP.nowPlaying.duration > 0 ? `${Math.floor(overviewNP.nowPlaying.elapsed / 60)}:${String(Math.floor(overviewNP.nowPlaying.elapsed % 60)).padStart(2, "0")}` : "0:00"}</span>
-              <span>{overviewNP.nowPlaying.duration > 0 ? `${Math.floor(overviewNP.nowPlaying.duration / 60)}:${String(Math.floor(overviewNP.nowPlaying.duration % 60)).padStart(2, "0")}` : "0:00"}</span>
-            </div>
-          </div>
-          )}
-
-          {/* Controls row */}
-          <div className="rh-actions">
-            <button className="rh-shuffle-btn" title="Shuffle">
-              <i className="fas fa-shuffle"></i>
-            </button>
-            <button
-              className={`rh-play-btn ${isPlaying ? "playing" : ""}`}
-              onClick={() => {
-                const streamUrl = overviewNP?.station?.listenUrl || radioConfig.streamUrl;
-                if (streamUrl) {
-                  audio.toggle(streamUrl, Number(radioConfig.stationId || getStationId()));
-                }
-              }}
-              disabled={!overviewNP?.station?.listenUrl && !radioConfig.streamUrl}
-            >
-              <i className={`fas fa-${isPlaying ? "pause" : "play"}`}></i>
-              <div className="rh-play-ring"></div>
-            </button>
-            <button className="rh-expand-btn" title="Full Player" onClick={() => setActiveTab("overview")}>
-              <i className="fas fa-expand"></i>
-            </button>
-          </div>
+        {/* ========== AZURACAST EMBEDDED PLAYER ========== */}
+        <div style={{ margin: "8px 16px 0" }}>
+          <iframe
+            src="https://azuracast.histoview.co.ke/public/turningpoint_church/embed?primary_color=E8A838&bg_color=1E1E1E&volume=100&rounded=1&allow_popup=1&continuous=1"
+            frameBorder="0"
+            allowTransparency={true}
+            allow="autoplay; encrypted-media; fullscreen"
+            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
+            loading="eager"
+            style={{ width: '100%', minHeight: '150px', height: '150px', border: 0, display: 'block', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}
+            title="Kingdom Seekers Radio Player"
+          />
         </div>
 
         {/* ========== TAB BAR ========== */}

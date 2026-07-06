@@ -212,9 +212,10 @@ export default function TVPage() {
     };
   }, [currentVideo, tvPlayer]);
 
-  // Call play() when current video changes
+  // Call play() when current video changes — skip if global player already on this video
   useEffect(() => {
     if (currentVideo) {
+      if (tvPlayer.currentVideoId === currentVideo.id && tvPlayer.visible) return;
       tvPlayer.play(currentVideo.id, currentSeek);
     }
   }, [currentVideo?.id, currentSeek, tvPlayer]);
@@ -373,8 +374,9 @@ export default function TVPage() {
       console.log('[Start TV] Resuming:', { resumeIndex, resumeSeek, videoTitle: savedVideo?.title });
       // Only update local state, NOT Firestore (interval will save actual progress)
       setTvUserState((prev) => prev ? { ...prev, currentIndex: resumeIndex, currentSeek: resumeSeek } : prev);
+      if (savedVideo) tvPlayer.play(savedVideo.id, resumeSeek);
     }
-  }, [currentVideo, tvUserState, videos]);
+  }, [currentVideo, tvUserState, videos, tvPlayer]);
 
   // ─── When video ends, show end card instead of auto-advancing ───
   const advanceToNext = useCallback(() => {
@@ -403,11 +405,15 @@ export default function TVPage() {
   // ─── Track current seek for periodic Firestore saves ───
   const handleTvTimeUpdate = useCallback((time: number) => {
     lastTvSeekRef.current = time;
+    // Also update index ref to ensure it's in sync
+    if (tvUserState) {
+      lastTvIndexRef.current = tvUserState.currentIndex;
+    }
     // Log every 10 seconds to avoid spam
     if (Math.floor(time) % 10 === 0) {
       console.log('[TV Time Update]', { time, currentIndex: lastTvIndexRef.current });
     }
-  }, []);
+  }, [tvUserState]);
 
   // Keep callbacks in sync with latest versions (after advanceToNext/handleTvTimeUpdate)
   useEffect(() => {
@@ -422,11 +428,19 @@ export default function TVPage() {
     const uid = auth.currentUser?.uid;
     const seek = lastTvSeekRef.current;
     const index = lastTvIndexRef.current;
-    console.log('[TV Progress] Saving:', { uid, index, seek });
-    if (uid && seek > 0) {
-      updateUserTvProgress(uid, index, seek).catch((err) => {
+    console.log('[TV Progress] Saving:', { uid: uid ? 'logged-in' : 'not-logged-in', index, seek });
+    if (uid) {
+      // Always save, even if seek is 0 (important for index changes)
+      updateUserTvProgress(uid, index, seek).then(() => {
+        console.log('[TV Progress] Saved successfully');
+      }).catch((err) => {
         console.error('[TV Progress] Failed to save:', err);
       });
+      setTvUserState((prev) =>
+        prev && (prev.currentIndex !== index || prev.currentSeek !== seek)
+          ? { ...prev, currentIndex: index, currentSeek: seek }
+          : prev
+      );
     }
   }, []);
 
@@ -455,7 +469,7 @@ export default function TVPage() {
     };
   }, [saveTvProgress]);
 
-  // ─── App resume — re-fetch user's TV state ───
+  // ─── App resume — save on background, merge remote state on foreground ───
   useEffect(() => {
     let canceled = false;
     import("@capacitor/core")
@@ -467,49 +481,57 @@ export default function TVPage() {
         if (canceled || !AppModule) return;
         const { App } = AppModule;
         App.addListener("appStateChange", (state) => {
-          if (state.isActive) {
-            console.log('[App Resume] App came back to foreground');
-            // Save any unsaved progress BEFORE re-fetching
+          if (!state.isActive) {
+            console.log('[App Background] Saving progress');
             saveTvProgress();
-            const uid = auth.currentUser?.uid;
-            if (uid) {
-              getUserTvState(uid).then((s) => {
-                console.log('[App Resume] Fetched state from Firestore:', { index: s.currentIndex, seek: s.currentSeek });
-                // Always update state on app resume to get latest position
-                setTvUserState(s);
-              });
-            }
+            return;
+          }
+          console.log('[App Resume] App came back to foreground');
+          saveTvProgress();
+          const uid = auth.currentUser?.uid;
+          if (uid) {
+            getUserTvState(uid).then((s) => {
+              const liveSeek = lastTvSeekRef.current;
+              const liveIndex = lastTvIndexRef.current;
+              const mergedSeek = Math.max(s.currentSeek, liveSeek);
+              const mergedIndex = tvPlayer.visible ? liveIndex : s.currentIndex;
+              console.log('[App Resume] Merged state:', { index: mergedIndex, seek: mergedSeek, remoteSeek: s.currentSeek, liveSeek });
+              setTvUserState({ ...s, currentIndex: mergedIndex, currentSeek: mergedSeek });
+            });
           }
         }).then((handler) => {
           if (canceled) handler.remove();
         });
       });
     return () => { canceled = true; };
-  }, [saveTvProgress]);
+  }, [saveTvProgress, tvPlayer]);
 
-  // ─── Tab visibility — re-fetch TV state when tab comes back into focus (web) ───
+  // ─── Tab visibility — save on hide, merge remote state on show (web) ───
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        console.log('[Tab Visible] Tab became visible');
-        // Save any unsaved progress BEFORE re-fetching
+      if (document.visibilityState === "hidden") {
         saveTvProgress();
-        const uid = auth.currentUser?.uid;
-        if (uid) {
-          // Re-fetch TV state from Firestore when tab becomes visible
-          getUserTvState(uid).then((s) => {
-            console.log('[Tab Visible] Fetched state:', { index: s.currentIndex, seek: s.currentSeek });
-            // Always update state on tab visibility to get latest position
-            setTvUserState(s);
-          });
-        }
+        return;
+      }
+      console.log('[Tab Visible] Tab became visible');
+      saveTvProgress();
+      const uid = auth.currentUser?.uid;
+      if (uid) {
+        getUserTvState(uid).then((s) => {
+          const liveSeek = lastTvSeekRef.current;
+          const liveIndex = lastTvIndexRef.current;
+          const mergedSeek = Math.max(s.currentSeek, liveSeek);
+          const mergedIndex = tvPlayer.visible ? liveIndex : s.currentIndex;
+          console.log('[Tab Visible] Merged state:', { index: mergedIndex, seek: mergedSeek });
+          setTvUserState({ ...s, currentIndex: mergedIndex, currentSeek: mergedSeek });
+        });
       }
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [saveTvProgress]);
+  }, [saveTvProgress, tvPlayer]);
 
   // ─── TV Heartbeat — marks this user as actively watching (for admin viewer count) ───
   useEffect(() => {

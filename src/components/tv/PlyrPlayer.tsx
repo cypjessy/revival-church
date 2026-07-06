@@ -3,6 +3,17 @@
 import { useEffect, useRef } from "react";
 import "plyr/dist/plyr.css";
 
+type PlyrInstance = {
+  currentTime: number;
+  play: () => Promise<unknown> | void;
+  muted: boolean;
+  destroy: () => void;
+  source?: unknown;
+  on: (eventName: string, handler: () => void) => void;
+};
+
+type PlyrConstructor = new (container: HTMLElement, options: Record<string, unknown>) => PlyrInstance;
+
 /**
  * Embedded YouTube / HTML5 player using core Plyr library.
  *
@@ -16,14 +27,12 @@ import "plyr/dist/plyr.css";
  */
 export default function PlyrPlayer({
   videoId,
-  sourceUrl,
   provider = "youtube",
   onEnded,
   initialSeek,
   onTimeUpdate,
 }: {
   videoId?: string;
-  sourceUrl?: string;
   provider?: "youtube" | "html5";
   onEnded: () => void;
   initialSeek?: number;
@@ -31,17 +40,58 @@ export default function PlyrPlayer({
   onTimeUpdate?: (time: number) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | HTMLVideoElement>(null);
-  const plyrRef = useRef<any>(null);
+  const plyrRef = useRef<PlyrInstance | null>(null);
   const onEndedRef = useRef(onEnded);
-  onEndedRef.current = onEnded;
   const onTimeUpdateRef = useRef(onTimeUpdate);
-  onTimeUpdateRef.current = onTimeUpdate;
   const initialSeekRef = useRef(initialSeek);
-  initialSeekRef.current = initialSeek;
 
   // Latest videoId ref so the source-update effect always reads the current value
   const videoIdRef = useRef(videoId);
-  videoIdRef.current = videoId;
+
+  const lastAppliedSeekRef = useRef<{ videoId: string | undefined; seek: number } | null>(null);
+  // Once playback moves past the resume point, block backward re-seeks (Android loop fix).
+  const maxPlaybackTimeRef = useRef(0);
+
+  useEffect(() => {
+    onEndedRef.current = onEnded;
+    onTimeUpdateRef.current = onTimeUpdate;
+    initialSeekRef.current = initialSeek;
+    videoIdRef.current = videoId;
+  }, [onEnded, onTimeUpdate, initialSeek, videoId]);
+
+  const applySeek = (player: PlyrInstance | null | undefined, seek?: number) => {
+    if (!player) return;
+    if (typeof seek !== "number" || !Number.isFinite(seek) || seek <= 0.1) return;
+
+    const currentVideoId = videoIdRef.current;
+    const lastApplied = lastAppliedSeekRef.current;
+
+    // Never rewind once the user has watched past this point on the current video.
+    if (
+      lastApplied?.videoId === currentVideoId &&
+      maxPlaybackTimeRef.current > seek + 3 &&
+      seek < maxPlaybackTimeRef.current - 3
+    ) {
+      return;
+    }
+
+    // Always apply seek if:
+    // 1. It's a different video, OR
+    // 2. The seek position has changed significantly (> 2 seconds difference)
+    const isDifferentVideo = lastApplied?.videoId !== currentVideoId;
+    const seekChanged = lastApplied && Math.abs(lastApplied.seek - seek) > 2;
+
+    if (!isDifferentVideo && !seekChanged) return;
+
+    try {
+      console.log('[PlyrPlayer] Applying seek:', { videoId: currentVideoId, seek, reason: isDifferentVideo ? 'new-video' : 'seek-changed' });
+      player.currentTime = seek;
+    } catch (err) {
+      console.error('[PlyrPlayer] Seek failed:', err);
+    }
+
+    lastAppliedSeekRef.current = { videoId: currentVideoId, seek };
+  };
 
   // ─── Effect 1: Create Plyr on mount (or when provider changes). ───
   // Only re-runs when `provider` changes. Video transitions are handled
@@ -63,9 +113,10 @@ export default function PlyrPlayer({
     let unmuteTimeout: ReturnType<typeof setTimeout> | undefined;
     let retryTimeout: ReturnType<typeof setTimeout> | undefined;
 
-    function createPlayer(module: any, retry = false) {
+    function createPlayer(module: unknown, retry = false) {
       if (destroyed || !container.isConnected) return;
-      const PlyrCtor = module.default || module;
+      const moduleWithDefault = module as { default?: PlyrConstructor } | PlyrConstructor;
+      const PlyrCtor = (moduleWithDefault as { default?: PlyrConstructor }).default || (moduleWithDefault as PlyrConstructor);
 
       try {
         const player = new PlyrCtor(container, {
@@ -82,9 +133,12 @@ export default function PlyrPlayer({
           return () => {
             // Use player.currentTime directly instead of event detail
             const t = plyrRef.current?.currentTime;
-            if (typeof t === "number" && Math.abs(t - last) >= 0.5) {
-              last = t;
-              onTimeUpdateRef.current?.(t);
+            if (typeof t === "number") {
+              if (t > maxPlaybackTimeRef.current) maxPlaybackTimeRef.current = t;
+              if (Math.abs(t - last) >= 0.5) {
+                last = t;
+                onTimeUpdateRef.current?.(t);
+              }
             }
           };
         })();
@@ -92,10 +146,7 @@ export default function PlyrPlayer({
 
         // On ready: apply seek and unmute
         const readyHandler = () => {
-          const seek = initialSeekRef.current;
-          if (seek !== undefined && seek > 0.1) {
-            try { player.currentTime = seek; } catch {}
-          }
+          applySeek(player, initialSeekRef.current);
 
           try {
             const playPromise = player.play();
@@ -106,7 +157,7 @@ export default function PlyrPlayer({
 
           unmuteTimeout = setTimeout(() => {
             try {
-              (player as any).muted = false;
+              player.muted = false;
               const playPromise = player.play();
               if (playPromise && typeof playPromise.catch === "function") {
                 playPromise.catch(() => {});
@@ -123,7 +174,7 @@ export default function PlyrPlayer({
           try { player.destroy(); } catch {}
           plyrRef.current = null;
         }
-      } catch (err) {
+      } catch {
         // Plyr failed to initialize — retry once
         if (!retry && !destroyed) {
           retryTimeout = setTimeout(() => createPlayer(module, true), 200);
@@ -145,13 +196,14 @@ export default function PlyrPlayer({
         plyrRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [provider]); // Only re-run when provider type changes
 
   // ─── Effect 2: Update video source in-place when videoId changes. ───
   // This keeps the Plyr instance alive and avoids destroying/recreating
   // the YouTube iframe, which causes the black screen.
   useEffect(() => {
+    maxPlaybackTimeRef.current = 0;
+    lastAppliedSeekRef.current = null;
     if (!plyrRef.current || !videoId) return;
 
     if (provider === "youtube") {
@@ -169,17 +221,27 @@ export default function PlyrPlayer({
 
         // Apply seek after source change — use ref so it's always current
         const seek = initialSeekRef.current;
-        if (seek !== undefined && seek > 0.1) {
+        if (typeof seek === "number" && seek > 0.1) {
           const seekTimer = setTimeout(() => {
-            try {
-              if (plyrRef.current) plyrRef.current.currentTime = seek;
-            } catch {}
+            applySeek(plyrRef.current, seek);
           }, 500);
           return () => clearTimeout(seekTimer);
         }
       } catch {}
     }
   }, [videoId, provider]);
+
+  // ─── Effect 3: Re-apply seek when initialSeek changes (e.g., app resume). ───
+  // This handles the case where the same video is resumed with a new seek position
+  useEffect(() => {
+    if (!plyrRef.current || !videoId || typeof initialSeek !== "number" || initialSeek <= 0.1) return;
+    
+    // Small delay to ensure player is ready
+    const seekTimer = setTimeout(() => {
+      applySeek(plyrRef.current, initialSeek);
+    }, 100);
+    return () => clearTimeout(seekTimer);
+  }, [initialSeek, videoId]);
 
   return provider === "html5" ? (
     <video

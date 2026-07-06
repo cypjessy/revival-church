@@ -41,7 +41,7 @@ export default function AdminBottomNav() {
   }, []);
 
   const activeTab = Object.entries(tabRoutes).find(
-    ([, route]) => pathname === route
+    ([, route]) => pathname === route || pathname?.startsWith(route + "/")
   )?.[0] || "dashboard";
 
   const navigate = (tab: string) => {

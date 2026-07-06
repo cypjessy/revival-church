@@ -14,10 +14,8 @@ interface RadioOverviewTabProps {
   isPlaying: boolean;
   listeners: number;
   backendRunning: boolean;
-  setIsPlaying: (v: boolean) => void;
-  setAutoDJ: (v: boolean) => void;
   streamUrl: string;
-  onTogglePlay: () => void;
+  setAutoDJ: (v: boolean) => void;
   pcMode: "schedule" | "playlist" | "single";
   pcQueue: QueueItem[];
   pcPlaylists: Playlist[];
@@ -38,8 +36,7 @@ export function RadioOverviewTab(props: RadioOverviewTabProps) {
   const {
     overviewNP, overviewHistory, overviewLoading,
     autoDJ, isLive, isPlaying, listeners, backendRunning,
-    setIsPlaying, setAutoDJ,
-    streamUrl, onTogglePlay,
+    streamUrl, setAutoDJ,
     pcMode, pcQueue, pcPlaylists, pcFiles,
     pcActivePlaylist, pcActiveTrack, pcAutoDJ, pcActionLoading,
     setPcMode, setPcPlaylists, setPcActivePlaylist, setPcActiveTrack, setPcActionLoading,
@@ -261,42 +258,18 @@ export function RadioOverviewTab(props: RadioOverviewTabProps) {
         </div>
       </div>
 
-      {/* Now Playing Card */}
-      <div className="now-playing-card">
-        <div className="now-playing-cover">
-          <img
-            src={np?.song.albumArt || "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=120&h=120&fit=crop"}
-            alt="Now Playing"
-          />
-          {backendRunning && (
-            <div className="now-playing-equalizer">
-              <span></span><span></span><span></span><span></span>
-            </div>
-          )}
-        </div>
-        <div className="now-playing-info">
-          <div className="now-playing-title">{backendRunning && np?.song.title ? np.song.title : (backendRunning ? (isPlaying ? "Now Playing" : "Idle") : "Station Offline")}</div>
-          <div className="now-playing-artist">{backendRunning && np?.song.artist ? np.song.artist : (backendRunning ? (isPlaying ? "" : "Station is online") : "Backend not running")}</div>
-          {backendRunning && np && (
-            <div className="now-playing-progress">
-              <div className="progress-bar">
-                <div className="progress-fill" style={{ width: `${progressPct}%` }}></div>
-              </div>
-              <div className="progress-time">
-                <span>{fmtTime(np.elapsed)}</span>
-                <span>{fmtTime(np.duration)}</span>
-              </div>
-            </div>
-          )}
-        </div>
-        <button
-          className="mini-player-btn"
-          onClick={onTogglePlay}
-          title={backendRunning ? (isPlaying ? "Stop" : "Play") : "Backend offline"}
-          disabled={!backendRunning || !streamUrl}
-        >
-          <i className={`fas ${isPlaying ? "fa-pause" : "fa-play"}`}></i>
-        </button>
+      {/* Now Playing - Premium AzuraCast Embedded Player */}
+      <div style={{ background: "var(--surface-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 0, overflow: "hidden" }}>
+        <iframe
+          src="https://azuracast.histoview.co.ke/public/turningpoint_church/embed?primary_color=E8A838&bg_color=1E1E1E&volume=100&rounded=1&allow_popup=1&continuous=1"
+          frameBorder="0"
+          allowTransparency={true}
+          allow="autoplay; encrypted-media; fullscreen"
+          sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
+          loading="eager"
+          style={{ width: '100%', minHeight: '150px', height: '150px', border: 0, display: 'block' }}
+          title="Kingdom Seekers Radio Player"
+        />
       </div>
 
       {/* Quick Actions */}

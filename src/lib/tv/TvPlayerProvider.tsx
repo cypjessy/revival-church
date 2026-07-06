@@ -48,14 +48,10 @@ export function TvPlayerProvider({ children }: { children: React.ReactNode }) {
   // Portal target — the DOM element to render the player into
   const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
 
-  // Stable registerTarget — no dependencies on state that changes during video transitions
+  // Stable registerTarget — portal target only; never re-apply seek on navigation
+  // (re-seeking from stale Firestore state caused Android resume loops).
   const registerTarget = useCallback((el: HTMLElement | null) => {
     setPortalTarget(el);
-    // Restore seek on page navigation — only when a target is provided
-    // (null = cleanup, skip restore). Uses ref so we don't need videoId in deps.
-    if (el && videoIdRef.current && latestSeekRef.current !== undefined) {
-      setSeek(latestSeekRef.current);
-    }
   }, []);
 
   const [playerKey, setPlayerKey] = useState(0);
@@ -63,18 +59,31 @@ export function TvPlayerProvider({ children }: { children: React.ReactNode }) {
   const latestSeekRef = useRef<number | undefined>(undefined);
 
   const play = useCallback((id: string, seekTime?: number) => {
-    setVideoId((prev) => {
-      // Force a fresh Plyr instance on every play() call (avoids stale iframe issues)
-      if (prev !== id) setPlayerKey((k) => k + 1);
-      return id;
-    });
-    setSeek(seekTime);
-    if (seekTime !== undefined) latestSeekRef.current = seekTime;
+    const isNewVideo = videoIdRef.current !== id;
+    if (isNewVideo) {
+      setPlayerKey((k) => k + 1);
+      const s = seekTime ?? latestSeekRef.current;
+      setSeek(s);
+      if (s !== undefined) latestSeekRef.current = s;
+    } else {
+      // Same video already loaded — never rewind to a stale Firestore seek.
+      // Only forward-seek if another device is meaningfully ahead (>5s).
+      const live = latestSeekRef.current ?? 0;
+      if (seekTime !== undefined && seekTime > live + 5) {
+        setSeek(seekTime);
+        latestSeekRef.current = seekTime;
+      }
+    }
+    setVideoId(id);
     setVisible(true);
   }, []);
 
   const hide = useCallback(() => {
     setVisible(false);
+    setVideoId(null);
+    videoIdRef.current = null;
+    setSeek(undefined);
+    latestSeekRef.current = undefined;
   }, []);
 
   const setCallbacks = useCallback((cbs: TvPlayerCallbacks) => {

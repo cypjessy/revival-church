@@ -332,6 +332,9 @@ export default function RadioPage() {
                     src="https://azuracast.histoview.co.ke/public/turningpoint_church/embed?primary_color=E8A838&bg_color=1A1A1A&volume=100&rounded=1&allow_popup=1&continuous=1"
                     frameBorder="0"
                     allowTransparency={true}
+                    allow="autoplay; encrypted-media; fullscreen"
+                    sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
+                    loading="eager"
                     style={{ width: '100%', minHeight: '150px', height: '150px', border: 0, display: 'block' }}
                     title="Kingdom Seekers Radio Player"
                   />

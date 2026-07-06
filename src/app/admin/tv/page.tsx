@@ -382,12 +382,10 @@ export default function AdminTVPage() {
     }
   }, []);
 
-  // Call play() when current video changes
-  // NOTE: No else/hide branch — keeping the player alive across async loads
-  // prevents unnecessary destruction/recreation of the YouTube iframe.
-  // The player is restored from localStorage seek on mount.
+  // Call play() when current video changes — skip if global player already on this video
   useEffect(() => {
     if (currentVideo) {
+      if (adminTvPlayer.currentVideoId === currentVideo.id && adminTvPlayer.visible) return;
       adminTvPlayer.play(currentVideo.id, adminTvInitialSeek);
     }
   }, [currentVideo?.id, adminTvInitialSeek, adminTvPlayer]);
@@ -412,12 +410,12 @@ export default function AdminTVPage() {
     }
     // Persist to Firestore for cross-session resume
     const uid = auth.currentUser?.uid;
-    if (uid && seek > 0) {
+    if (uid) {
       updateUserTvProgress(uid, index, seek).catch((err) => {
         console.error('[Admin TV Progress] Failed to save to Firestore:', err);
       });
     }
-  }, []);
+  }, [ADMIN_TV_SEEK_KEY, ADMIN_TV_INDEX_KEY]);
 
   // Periodically save seek position (every 5s)
   useEffect(() => {
@@ -442,32 +440,35 @@ export default function AdminTVPage() {
     };
   }, [saveAdminTvProgress]);
 
-  // Tab visibility — restore TV state from Firestore when tab becomes visible (web)
+  // Tab visibility — save on hide, merge remote state on show (web)
   useEffect(() => {
     const handleVisibilityChange = async () => {
-      if (document.visibilityState === "visible") {
-        console.log('[Admin Tab Visible] Tab became visible');
-        // Save any unsaved progress BEFORE re-fetching
+      if (document.visibilityState === "hidden") {
         saveAdminTvProgress();
-        const uid = auth.currentUser?.uid;
-        if (uid) {
-          // Re-fetch TV state from Firestore to pick up changes from other tabs/pages
-          try {
-            const state = await getUserTvState(uid);
-            console.log('[Admin Tab Visible] Fetched state:', { index: state.currentIndex, seek: state.currentSeek });
-            // Always update state on tab visibility to get latest position
-            if (state.currentIndex >= 0 && state.currentIndex < allVideos.length) {
-              setCurrentTvIndex(state.currentIndex);
-            }
-            if (state.currentSeek > 0.1) {
-              if (typeof window !== "undefined") {
-                localStorage.setItem(ADMIN_TV_SEEK_KEY, String(state.currentSeek));
-              }
-              lastAdminTvSeekRef.current = state.currentSeek;
-            }
-          } catch (err) {
-            console.error('[Admin Tab Visible] Failed to fetch state:', err);
+        return;
+      }
+      console.log('[Admin Tab Visible] Tab became visible');
+      saveAdminTvProgress();
+      const uid = auth.currentUser?.uid;
+      if (uid) {
+        try {
+          const state = await getUserTvState(uid);
+          const liveSeek = lastAdminTvSeekRef.current;
+          const liveIndex = lastAdminTvIndexRef.current;
+          const mergedSeek = Math.max(state.currentSeek, liveSeek);
+          const mergedIndex = adminTvPlayer.visible ? liveIndex : state.currentIndex;
+          console.log('[Admin Tab Visible] Merged state:', { index: mergedIndex, seek: mergedSeek });
+          if (mergedIndex >= 0 && mergedIndex < allVideos.length) {
+            setCurrentTvIndex(mergedIndex);
           }
+          if (mergedSeek > 0.1) {
+            if (typeof window !== "undefined") {
+              localStorage.setItem(ADMIN_TV_SEEK_KEY, String(mergedSeek));
+            }
+            lastAdminTvSeekRef.current = mergedSeek;
+          }
+        } catch (err) {
+          console.error('[Admin Tab Visible] Failed to fetch state:', err);
         }
       }
     };
@@ -475,7 +476,49 @@ export default function AdminTVPage() {
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [saveAdminTvProgress, currentVideo, allVideos.length]);
+  }, [saveAdminTvProgress, adminTvPlayer, allVideos.length, ADMIN_TV_SEEK_KEY]);
+
+  // App resume — save on background, merge remote state on foreground (Android)
+  useEffect(() => {
+    let canceled = false;
+    import("@capacitor/core")
+      .then(({ Capacitor }) => {
+        if (canceled || !Capacitor.isNativePlatform()) return;
+        return import("@capacitor/app");
+      })
+      .then((AppModule) => {
+        if (canceled || !AppModule) return;
+        const { App } = AppModule;
+        App.addListener("appStateChange", async (state) => {
+          if (!state.isActive) {
+            saveAdminTvProgress();
+            return;
+          }
+          saveAdminTvProgress();
+          const uid = auth.currentUser?.uid;
+          if (!uid) return;
+          try {
+            const remote = await getUserTvState(uid);
+            const liveSeek = lastAdminTvSeekRef.current;
+            const liveIndex = lastAdminTvIndexRef.current;
+            const mergedSeek = Math.max(remote.currentSeek, liveSeek);
+            const mergedIndex = adminTvPlayer.visible ? liveIndex : remote.currentIndex;
+            if (mergedIndex >= 0 && mergedIndex < allVideos.length) {
+              setCurrentTvIndex(mergedIndex);
+            }
+            if (mergedSeek > 0.1) {
+              if (typeof window !== "undefined") {
+                localStorage.setItem(ADMIN_TV_SEEK_KEY, String(mergedSeek));
+              }
+              lastAdminTvSeekRef.current = mergedSeek;
+            }
+          } catch {}
+        }).then((handler) => {
+          if (canceled) handler.remove();
+        });
+      });
+    return () => { canceled = true; };
+  }, [saveAdminTvProgress, adminTvPlayer, allVideos.length, ADMIN_TV_SEEK_KEY]);
 
   // Generate today's broadcast
   const handleGenerateBroadcast = useCallback(async () => {

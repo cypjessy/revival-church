@@ -173,10 +173,15 @@ export default function AdminPage() {
     const seek = lastTvSeekRef.current;
     const index = lastTvIndexRef.current;
     console.log('[Admin Dashboard TV Progress] Saving:', { uid, index, seek });
-    if (uid && seek > 0) {
+    if (uid) {
       updateUserTvProgress(uid, index, seek).catch((err) => {
         console.error('[Admin Dashboard TV Progress] Failed to save:', err);
       });
+      setTvUserState((prev) =>
+        prev && (prev.currentIndex !== index || prev.currentSeek !== seek)
+          ? { ...prev, currentIndex: index, currentSeek: seek }
+          : prev
+      );
     }
   }, []);
 

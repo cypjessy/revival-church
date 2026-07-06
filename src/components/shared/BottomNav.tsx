@@ -1,13 +1,26 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 
 interface BottomNavProps {
-  activeTab: "home" | "radio" | "meetings" | "gallery" | "tv";
+  activeTab?: "home" | "radio" | "meetings" | "gallery" | "tv";
 }
 
-export default function BottomNav({ activeTab }: BottomNavProps) {
+export default function BottomNav({ activeTab: propActiveTab }: BottomNavProps) {
   const router = useRouter();
+  const pathname = usePathname();
+
+  // Auto-detect active tab from pathname if not provided as prop
+  const detectedTab = (() => {
+    if (pathname === "/dashboard") return "home";
+    if (pathname === "/radio") return "radio";
+    if (pathname === "/tv") return "tv";
+    if (pathname === "/meetings") return "meetings";
+    if (pathname === "/gallery") return "gallery";
+    return null;
+  })();
+
+  const activeTab = propActiveTab || detectedTab || "home";
 
   const navigate = (path: string) => {
     router.push(path);
