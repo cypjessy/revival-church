@@ -822,12 +822,8 @@ export default function DashboardPage() {
             if (uid) {
               getUserTvState(uid).then((s) => {
                 console.log('[Dashboard App Resume] Fetched state:', { index: s.currentIndex, seek: s.currentSeek });
-                // Only update if we don't have active playback
-                if (!tvCurrentVideo || !hasInteractedWithTv.current) {
-                  setTvUserState(s);
-                } else {
-                  console.log('[Dashboard App Resume] Skipping state update - video is actively playing');
-                }
+                // Always update state on app resume to get latest position
+                setTvUserState(s);
               });
             }
           }
@@ -836,7 +832,7 @@ export default function DashboardPage() {
         });
       });
     return () => { canceled = true; };
-  }, [saveTvProgress, tvCurrentVideo]);
+  }, [saveTvProgress]);
 
   /* Tab visibility — re-fetch TV state when tab comes back into focus (web) */
   useEffect(() => {
@@ -850,12 +846,8 @@ export default function DashboardPage() {
           // Re-fetch TV state from Firestore when tab becomes visible
           getUserTvState(uid).then((s) => {
             console.log('[Dashboard Tab Visible] Fetched state:', { index: s.currentIndex, seek: s.currentSeek });
-            // Only update if we don't have active playback
-            if (!tvCurrentVideo || !hasInteractedWithTv.current) {
-              setTvUserState(s);
-            } else {
-              console.log('[Dashboard Tab Visible] Skipping state update - video is actively playing');
-            }
+            // Always update state on tab visibility to get latest position
+            setTvUserState(s);
           });
         }
       }

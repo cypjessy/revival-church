@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useAudio } from "@/lib/audio/AudioContext";
 import BottomNavBar from "@/components/shared/BottomNavBar";
 import ToastBridge from "@/components/dashboard/ToastBridge";
-import { getNowPlaying, getSongHistory, getSettings, getStreamers, getApiBase, getStationId, getPublicPlayerUrl } from "@/lib/azuracast";
+import { getNowPlaying, getSongHistory, getSettings, getStreamers, getApiBase, getStationId } from "@/lib/azuracast";
 import type { NowPlayingData, SongHistoryItem, StationSettings, Streamer } from "@/lib/azuracast";
 import { churchConfig } from "@/lib/churchConfig";
 
@@ -18,25 +17,7 @@ export default function RadioPage() {
   const [streamers, setStreamers] = useState<Streamer[]>([]);
   const [radioLoading, setRadioLoading] = useState(true);
 
-  const audio = useAudio();
-  const listenUrl = npData?.station?.listenUrl || `${getApiBase()}/listen/${getStationId()}/radio.mp3`;
-  const embedUrl = `${getPublicPlayerUrl()}/embed`;
   const stationName = settings?.name || "Kingdom Seekers Radio";
-
-  // Push now-playing metadata to Android media notification (safe wrapped)
-  useEffect(() => {
-    try {
-      if (audio.isPlaying) {
-        const np = npData?.nowPlaying;
-        const title = np?.song?.title || stationName;
-        const artist = np?.song?.artist || "Kingdom Seekers Church Nakuru";
-        const albumArt = np?.song?.albumArt;
-        audio.updateMediaSession(title, artist, albumArt);
-      }
-    } catch {
-      // Media notification is optional — ignore failures
-    }
-  }, [audio.isPlaying, audio.currentStationId, npData?.nowPlaying?.song?.title, npData?.nowPlaying?.song?.artist, npData?.nowPlaying?.song?.albumArt, audio.updateMediaSession, stationName]);
 
   /* Poll AzuraCast now playing + history every 10 seconds */
   useEffect(() => {
@@ -345,57 +326,15 @@ export default function RadioPage() {
         <div className="content-scroll">
           <div className="content-inner">
               <div className="section-spacer">
-                {/* Now Playing — premium hero card with volume controls */}
-                <div className="np-glass">
-                  <div className="np-row">
-                    {np?.song?.albumArt ? (
-                      <div className="np-art"><img src={np.song.albumArt} alt="" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} /></div>
-                    ) : (
-                      <div className="np-art-fallback"><i className="fas fa-radio"></i></div>
-                    )}
-                    <div className="np-body">
-                      <div className="np-title">{np?.song?.title || "Not Playing"}</div>
-                      <div className="np-artist">{np?.song?.artist || (audio.isPlaying ? "Now Playing" : "Station is offline")}</div>
-                      {np && np.duration > 0 && (
-                        <div className="np-progress">
-                          <div className="np-progress-bar">
-                            <div className="np-progress-fill" style={{ width: `${Math.min(100, (np.elapsed / np.duration) * 100)}%` }}></div>
-                          </div>
-                          <div className="np-progress-time">
-                            <span>{formatTime(np.elapsed)}</span>
-                            <span>{formatTime(np.duration)}</span>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  {/* Controls row: play button + volume slider */}
-                  <div className="np-controls-row">
-                    <button
-                      className={`np-play-btn${audio.isPlaying ? " playing" : ""}`}
-                      onClick={() => audio.toggle(listenUrl, Number(getStationId()))}
-                    >
-                      <i className={`fas fa-${audio.isPlaying ? "pause" : "play"}`} style={{ marginLeft: audio.isPlaying ? 0 : 2 }}></i>
-                    </button>
-                    <div className="np-vol-wrap">
-                      <i className={`fas fa-${audio.volume === 0 ? "volume-xmark" : audio.volume < 0.5 ? "volume-low" : "volume-high"}`}></i>
-                      <input
-                        type="range"
-                        className="np-vol-slider"
-                        min="0"
-                        max="1"
-                        step="0.05"
-                        value={audio.volume}
-                        onChange={(e) => audio.setVolume(parseFloat(e.target.value))}
-                      />
-                    </div>
-                  </div>
-                  {audio.isPlaying && (
-                    <div className="np-bg-indicator">
-                      <i className="fas fa-volume-high" style={{ color: "var(--primary)" }}></i>
-                      Playing in background
-                    </div>
-                  )}
+                {/* Now Playing — Premium AzuraCast Embedded Player */}
+                <div className="np-glass" style={{ padding: 0, overflow: 'hidden' }}>
+                  <iframe
+                    src="https://azuracast.histoview.co.ke/public/turningpoint_church/embed?primary_color=E8A838&bg_color=1A1A1A&volume=100&rounded=1&allow_popup=1&continuous=1"
+                    frameBorder="0"
+                    allowTransparency={true}
+                    style={{ width: '100%', minHeight: '150px', height: '150px', border: 0, display: 'block' }}
+                    title="Kingdom Seekers Radio Player"
+                  />
                 </div>
 
                 {/* Live DJ */}

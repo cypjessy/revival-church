@@ -455,19 +455,15 @@ export default function AdminTVPage() {
           try {
             const state = await getUserTvState(uid);
             console.log('[Admin Tab Visible] Fetched state:', { index: state.currentIndex, seek: state.currentSeek });
-            // Only update if we don't have active playback
-            if (!currentVideo || !hasInteractedWithTv.current) {
-              if (state.currentIndex >= 0 && state.currentIndex < allVideos.length) {
-                setCurrentTvIndex(state.currentIndex);
+            // Always update state on tab visibility to get latest position
+            if (state.currentIndex >= 0 && state.currentIndex < allVideos.length) {
+              setCurrentTvIndex(state.currentIndex);
+            }
+            if (state.currentSeek > 0.1) {
+              if (typeof window !== "undefined") {
+                localStorage.setItem(ADMIN_TV_SEEK_KEY, String(state.currentSeek));
               }
-              if (state.currentSeek > 0.1) {
-                if (typeof window !== "undefined") {
-                  localStorage.setItem(ADMIN_TV_SEEK_KEY, String(state.currentSeek));
-                }
-                lastAdminTvSeekRef.current = state.currentSeek;
-              }
-            } else {
-              console.log('[Admin Tab Visible] Skipping state update - video is actively playing');
+              lastAdminTvSeekRef.current = state.currentSeek;
             }
           } catch (err) {
             console.error('[Admin Tab Visible] Failed to fetch state:', err);
