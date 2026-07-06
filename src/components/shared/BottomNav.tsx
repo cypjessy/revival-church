@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 
 interface BottomNavProps {
-  activeTab: "home" | "radio" | "meetings" | "gallery";
+  activeTab: "home" | "radio" | "meetings" | "gallery" | "tv";
 }
 
 export default function BottomNav({ activeTab }: BottomNavProps) {
@@ -33,6 +33,13 @@ export default function BottomNav({ activeTab }: BottomNavProps) {
       >
         <i className="fas fa-radio"></i>
         <span>Radio</span>
+      </button>
+      <button
+        className={`nav-item${activeTab === "tv" ? " active" : ""}`}
+        onClick={() => navigate("/tv")}
+      >
+        <i className="fas fa-tv"></i>
+        <span>TV</span>
       </button>
       <button
         className={`nav-item${activeTab === "meetings" ? " active" : ""}`}

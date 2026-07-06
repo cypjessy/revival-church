@@ -147,49 +147,9 @@ export function AudioProvider({ children }: { children: ReactNode }) {
 
   // Handle notification control events (play, pause, stop, headphone button)
   const handleControlsAction = useCallback((message: string) => {
-    switch (message) {
-      case "music-controls-play": {
-        const url = currentStreamUrlRef.current;
-        if (url) {
-          const audio = audioRef.current;
-          if (audio) {
-            const cacheBust = url.includes("?") ? `&_=${Date.now()}` : `?_=${Date.now()}`;
-            audio.src = url + cacheBust;
-            audio.load();
-            audio.play().catch(() => {
-              setTimeout(() => {
-                audio.play().catch(() => {});
-              }, 300);
-            });
-          }
-          setIsPlaying(true);
-        }
-        break;
-      }
-      case "music-controls-pause":
-        audioRef.current?.pause();
-        setIsPlaying(false);
-        break;
-      case "music-controls-destroy":
-        // Stop button pressed — stop audio and remove notification
-        {
-          const audio = audioRef.current;
-          if (audio) {
-            audio.pause();
-            audio.removeAttribute("src");
-            audio.load();
-          }
-          setIsPlaying(false);
-          setCurrentStreamUrl(null);
-          setCurrentStationId(null);
-        }
-        break;
-      case "music-controls-media-button":
-        // Headphone button single press — toggle play/pause
-        if (isPlayingRef.current) {
-          audioRef.current?.pause();
-          setIsPlaying(false);
-        } else {
+    try {
+      switch (message) {
+        case "music-controls-play": {
           const url = currentStreamUrlRef.current;
           if (url) {
             const audio = audioRef.current;
@@ -197,24 +157,77 @@ export function AudioProvider({ children }: { children: ReactNode }) {
               const cacheBust = url.includes("?") ? `&_=${Date.now()}` : `?_=${Date.now()}`;
               audio.src = url + cacheBust;
               audio.load();
-              audio.play().catch(() => {});
+              audio.play().catch(() => {
+                setTimeout(() => {
+                  audio.play().catch(() => {});
+                }, 300);
+              });
             }
             setIsPlaying(true);
           }
+          break;
         }
-        break;
+        case "music-controls-pause":
+          audioRef.current?.pause();
+          setIsPlaying(false);
+          break;
+        case "music-controls-destroy":
+          // Stop button pressed — stop audio and remove notification
+          {
+            const audio = audioRef.current;
+            if (audio) {
+              audio.pause();
+              audio.removeAttribute("src");
+              audio.load();
+            }
+            setIsPlaying(false);
+            setCurrentStreamUrl(null);
+            setCurrentStationId(null);
+          }
+          break;
+        case "music-controls-media-button":
+          // Headphone button single press — toggle play/pause
+          if (isPlayingRef.current) {
+            audioRef.current?.pause();
+            setIsPlaying(false);
+          } else {
+            const url = currentStreamUrlRef.current;
+            if (url) {
+              const audio = audioRef.current;
+              if (audio) {
+                const cacheBust = url.includes("?") ? `&_=${Date.now()}` : `?_=${Date.now()}`;
+                audio.src = url + cacheBust;
+                audio.load();
+                audio.play().catch(() => {});
+              }
+              setIsPlaying(true);
+            }
+          }
+          break;
+      }
+    } catch {
+      // Native control event failure — ignore to prevent crash
     }
   }, []);
 
   // Set up notification control event listeners once on mount
   useEffect(() => {
     loadMusicControls().then(() => {
-      const mc = getMC();
-      if (!mc) return;
-      // iOS uses the plugin's addListener
-      mc.addListener("controlsNotification", (info: { message: string }) => {
-        handleControlsAction(info.message);
-      });
+      try {
+        const mc = getMC();
+        if (!mc) return;
+        // iOS uses the plugin's addListener
+        const p = mc.addListener("controlsNotification", (info: { message: string }) => {
+          handleControlsAction(info.message);
+        });
+        if (p && typeof p.catch === "function") {
+          p.catch(() => { /* listener registration failed — controls will not work */ });
+        }
+      } catch {
+        // Plugin not available
+      }
+    }).catch(() => {
+      // Plugin not available
     });
 
     // Android uses a document-level event (workaround for Capacitor bug)
@@ -233,13 +246,17 @@ export function AudioProvider({ children }: { children: ReactNode }) {
   }, [handleControlsAction]);
 
   const updateMediaSession = useCallback(async (title: string, artist: string, albumArt?: string) => {
-    mediaTitleRef.current = title;
-    mediaArtistRef.current = artist;
-    mediaArtRef.current = albumArt;
+    try {
+      mediaTitleRef.current = title;
+      mediaArtistRef.current = artist;
+      mediaArtRef.current = albumArt;
 
-    // If currently playing, update the notification with the new metadata
-    if (isPlayingRef.current) {
-      await createNotification(title, artist, albumArt);
+      // If currently playing, update the notification with the new metadata
+      if (isPlayingRef.current) {
+        await createNotification(title, artist, albumArt);
+      }
+    } catch {
+      // Media session update is optional — ignore failures
     }
   }, []);
 

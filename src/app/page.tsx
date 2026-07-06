@@ -640,9 +640,24 @@ export default function LoginPage() {
             .app-container {
                 max-width: 480px;
                 margin: 0 auto;
-                border-left: 1px solid var(--border);
-                border-right: 1px solid var(--border);
             }
+        }
+        @media (min-width: 768px) {
+            .app-container { max-width: 440px; }
+            .login-screen { padding: 0 32px; }
+            .login-hero { padding: 48px 0 36px; }
+            .login-hero-logo { width: 100px; height: 100px; }
+            .login-hero-logo i { font-size: 44px; }
+            .login-hero h1 { font-size: 30px; }
+            .login-hero p { font-size: 16px; max-width: 340px; }
+            .input-wrapper input { padding: 18px 54px 18px 50px; font-size: 17px; }
+            .btn-primary { padding: 20px; font-size: 17px; }
+            .login-footer { padding: 28px 0 40px; }
+            .modal-body { padding: 0 32px 24px; }
+            .modal-header { padding: 8px 32px 20px; }
+        }
+        @media (min-width: 1024px) {
+            .app-container { max-width: 480px; }
         }
       `}</style>
 

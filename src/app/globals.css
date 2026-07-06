@@ -2,11 +2,12 @@
    This file only contains global responsive overrides. */
 
 /* ── Tablet+ responsive container width ── */
+/* Fill the full screen on tablets instead of a phone-sized column */
 @media (min-width: 768px) {
-  .app-container { max-width: 768px !important; }
+  .app-container { max-width: 100% !important; margin: 0 !important; border: none !important; }
 }
-@media (min-width: 1024px) {
-  .app-container { max-width: 900px !important; }
+@media (min-width: 1400px) {
+  .app-container { max-width: 1200px !important; margin: 0 auto !important; border-left: 1px solid var(--border) !important; border-right: 1px solid var(--border) !important; }
 }
 
 /* ── Admin sidebar (replaces bottom nav on tablets) ── */
@@ -56,15 +57,15 @@
   .admin-sidebar .nav-item span { font-size: 10px; }
 }
 
-/* ── Public bottom nav: wider on tablets but still at bottom ── */
+/* ── Public bottom nav: full width on tablets ── */
 @media (min-width: 768px) {
   .bottom-nav:not(:has(.admin-nav-item)) {
-    max-width: 768px !important;
+    max-width: 100% !important;
   }
 }
-@media (min-width: 1024px) {
+@media (min-width: 1400px) {
   .bottom-nav:not(:has(.admin-nav-item)) {
-    max-width: 900px !important;
+    max-width: 1200px !important;
   }
 }
 

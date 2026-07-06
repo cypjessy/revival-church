@@ -8,7 +8,7 @@ import BottomNavBar from "@/components/shared/BottomNavBar";
 import { useAppStore } from "@/lib/useAppStore";
 import { getMeeting, generateLiveKitToken } from "@/lib/meetings";
 import type { Meeting } from "@/lib/meetings";
-import { Room, RoomEvent } from "livekit-client";
+import { Room, RoomEvent, Track } from "livekit-client";
 
 export default function MemberListenPage() {
   const router = useRouter();
@@ -24,6 +24,7 @@ export default function MemberListenPage() {
   const [participants, setParticipants] = useState<string[]>([]);
   const [speakingParticipants, setSpeakingParticipants] = useState<Set<string>>(new Set());
   const [isMuted, setIsMuted] = useState(true);
+  const [audioEnabled, setAudioEnabled] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [showInfo, setShowInfo] = useState(false);
   const roomRef = useRef<Room | null>(null);
@@ -71,12 +72,6 @@ export default function MemberListenPage() {
       const room = new Room({
         adaptiveStream: true,
         dynacast: true,
-        audioCaptureDefaults: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
       });
 
       room.on(RoomEvent.ParticipantConnected, (p) => {
@@ -104,6 +99,15 @@ export default function MemberListenPage() {
         }
       });
 
+      // CRITICAL: Attach remote audio tracks to <audio> elements so sound plays
+      room.on(RoomEvent.TrackSubscribed, (track) => {
+        if (track.kind === Track.Kind.Audio) {
+          const audioEl = track.attach();
+          audioEl.style.display = 'none';
+          document.body.appendChild(audioEl);
+        }
+      });
+
       room.on(RoomEvent.Disconnected, async () => {
         setConnected(false);
         setParticipants([]);
@@ -121,18 +125,12 @@ export default function MemberListenPage() {
 
       await room.connect(url, token);
 
-      // Start audio context for remote track playback (best-effort for desktop)
-      room.startAudio().catch(() => {});
+      // Best-effort muted track creation — primes permission system on Android.
+      // If blocked, user can tap mic button later.
+      room.localParticipant.setMicrophoneEnabled(false).catch(() => {});
 
-      // On mobile/Android WebView, audio autoplay is blocked until a user gesture.
-      // Set up a one-tap handler to resume audio context on first interaction.
-      const startAudioOnce = () => {
-        room.startAudio().catch(() => {});
-        document.removeEventListener('click', startAudioOnce);
-        document.removeEventListener('touchstart', startAudioOnce);
-      };
-      document.addEventListener('click', startAudioOnce, { once: true });
-      document.addEventListener('touchstart', startAudioOnce, { once: true });
+      // Audio is not enabled yet — user must tap "Start Listening" button.
+      // This ensures startAudio() is called with a proper user gesture.
 
       // Join listen-only — don't create any mic track yet
       roomRef.current = room;
@@ -164,6 +162,15 @@ export default function MemberListenPage() {
     }
     if (timerRef.current) clearInterval(timerRef.current);
     router.push("/meetings");
+  };
+
+  const handleStartListening = () => {
+    const room = roomRef.current;
+    if (!room) return;
+    // Enable audio output (resume AudioContext with user gesture)
+    room.startAudio().catch(() => {});
+    setAudioEnabled(true);
+    showToast("Listening", "You can now hear the meeting", "success", 2500);
   };
 
   const toggleMute = async () => {
@@ -892,6 +899,44 @@ export default function MemberListenPage() {
           <div className="bg-orb"></div>
         </div>
 
+        {connected && !audioEnabled ? (
+          <div style={{
+            position: "relative", zIndex: 1, flex: 1, display: "flex",
+            flexDirection: "column", alignItems: "center", justifyContent: "center",
+            padding: 40, textAlign: "center", gap: 24
+          }}>
+            <div style={{
+              width: 100, height: 100, borderRadius: "50%",
+              background: "linear-gradient(135deg, var(--gradient-blue), var(--gradient-purple))",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              boxShadow: "0 0 50px rgba(59,130,246,0.25)",
+              animation: "pulseLoad 1.5s ease-in-out infinite"
+            }}>
+              <i className="fas fa-headphones" style={{ fontSize: 40, color: "#fff" }}></i>
+            </div>
+            <h1 style={{ fontSize: 20, fontWeight: 800, margin: 0 }}>{meeting?.title}</h1>
+            <p style={{ fontSize: 14, color: "var(--text-secondary)", margin: 0, lineHeight: 1.5, maxWidth: 300 }}>
+              Tap the button below to start listening to the meeting
+            </p>
+            <button
+              onClick={handleStartListening}
+              style={{
+                padding: "16px 48px", borderRadius: 100, border: "none",
+                background: "linear-gradient(135deg, var(--gradient-blue), #2563EB)",
+                color: "#fff", fontSize: 17, fontWeight: 800, cursor: "pointer",
+                boxShadow: "0 8px 32px rgba(59,130,246,0.35)",
+                display: "flex", alignItems: "center", gap: 10,
+                transition: "all 0.2s ease"
+              }}
+            >
+              <i className="fas fa-headphones-simple"></i>
+              Start Listening
+            </button>
+            <p style={{ fontSize: 12, color: "var(--text-tertiary)", margin: 0 }}>
+              Tap "Speak" below to unmute your microphone when you want to talk
+            </p>
+          </div>
+        ) : (
         <div className="listen-content">
           {/* TOP BAR */}
           <div className="top-bar">
@@ -1029,7 +1074,8 @@ export default function MemberListenPage() {
               </button>
             </div>
           </div>
-        </div>
+          </div>
+        )}
       </div>
 
       {/* INFO OVERLAY */}

@@ -16,6 +16,10 @@
 
 
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
-        <item name="android:background">@drawable/splash</item>
+        <!-- Solid dark background matching the app theme — no Capacitor logo flash -->
+        <item name="android:background">#0F0F0F</item>
+        <!-- On Android 12+, use app icon as the splash icon instead of Capacitor default -->
+        <item name="windowSplashScreenBackground">#0F0F0F</item>
+        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
     </style>
 </resources>

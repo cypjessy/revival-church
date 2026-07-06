@@ -25,6 +25,8 @@ import {
   deleteStreamer,
 } from "@/lib/azuracast";
 import { hapticSuccess } from "@/lib/haptics";
+import { useAudio } from "@/lib/audio/AudioContext";
+import { getRadioConfig, defaultRadioConfig } from "@/lib/radioConfig";
 import type { Playlist, StationFile, QueueItem } from "@/lib/azuracast";
 import dynamic from "next/dynamic";
 
@@ -52,6 +54,40 @@ export default function AdminRadioPage() {
   const [autoDJ, setAutoDJ] = useState(false);
   const [listeners, setListeners] = useState(0);
   const [overviewNP, setOverviewNP] = useState<import("@/lib/azuracast").NowPlayingData | null>(null);
+
+  // AudioContext for stream playback
+  const audio = useAudio();
+
+  // Radio config from Firestore
+  const [radioConfig, setRadioConfig] = useState(defaultRadioConfig());
+
+  // Sync isPlaying with AudioContext
+  useEffect(() => {
+    const streamUrl = overviewNP?.station?.listenUrl || radioConfig.streamUrl;
+    const npPlaying = audio.isPlaying && audio.currentStreamUrl === streamUrl;
+    queueMicrotask(() => setIsPlaying(npPlaying));
+  }, [audio.isPlaying, audio.currentStationId, overviewNP, radioConfig.streamUrl]);
+
+  // Fetch radio config from Firestore on mount
+  useEffect(() => {
+    getRadioConfig().then((config) => {
+      if (config) setRadioConfig({
+        stationName: config.stationName || "Kingdom Seekers Radio",
+        description: config.description || "Radio Station",
+        stationId: config.stationId || "2",
+        embedUrl: config.embedUrl || "https://azuracast.histoview.co.ke/public/turningpoint_church/embed?theme=dark",
+        streamUrl: config.streamUrl || "",
+      });
+    }).catch(() => {});
+  }, []);
+
+  // Push now-playing metadata to Android media notification when audio is playing
+  useEffect(() => {
+    if (audio.isPlaying && overviewNP?.nowPlaying?.song) {
+      const np = overviewNP.nowPlaying;
+      audio.updateMediaSession(np.song.title, np.song.artist, np.song.albumArt);
+    }
+  }, [audio.isPlaying, overviewNP?.nowPlaying?.song?.title, audio.updateMediaSession]);
   const [overviewHistory, setOverviewHistory] = useState<import("@/lib/azuracast").SongHistoryItem[]>([]);
   const [overviewLoading, setOverviewLoading] = useState(false);
 
@@ -464,32 +500,227 @@ export default function AdminRadioPage() {
         }
         .listener-count i { font-size: 11px; color: var(--text-tertiary); }
 
-        /* ========== NOW PLAYING BAR ========== */
-        .now-playing-bar {
-          display: flex; align-items: center; gap: 10px;
-          padding: 8px 16px; background: var(--surface);
-          border-bottom: 1px solid var(--border); flex-shrink: 0;
-        }
-        .npb-thumb {
-          width: 36px; height: 36px; border-radius: 6px; overflow: hidden; flex-shrink: 0;
-        }
-        .npb-thumb img { width: 100%; height: 100%; object-fit: cover; }
-        .npb-info { flex: 1; min-width: 0; }
-        .npb-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .npb-artist { font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .npb-player-btn {
-          width: 34px; height: 34px; border-radius: var(--radius-full);
-          background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
-          border: none; color: #fff; font-size: 13px;
-          display: flex; align-items: center; justify-content: center;
-          cursor: pointer; transition: all 0.2s ease; flex-shrink: 0;
-          box-shadow: var(--shadow-soft);
-        }
-        .npb-player-btn:active { transform: scale(0.9); }
-
         @keyframes livePulse {
           0%, 100% { opacity: 1; transform: scale(1); }
           50% { opacity: 0.4; transform: scale(1.5); }
+        }
+
+        /* ===== PREMIUM RADIO HERO CARD ===== */
+        .rh-hero {
+            position: relative;
+            background: linear-gradient(180deg, rgba(232,168,56,0.06) 0%, rgba(15,15,15,0.5) 100%);
+            border: 1px solid rgba(232,168,56,0.12);
+            border-radius: var(--radius-xl);
+            padding: 20px 18px 16px;
+            overflow: hidden;
+            box-shadow: 0 8px 40px rgba(0,0,0,0.4), 0 0 80px rgba(232,168,56,0.04);
+            animation: rhFadeIn 0.6s ease;
+        }
+        @keyframes rhFadeIn {
+            from { opacity: 0; transform: translateY(16px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .rh-glow-1 {
+            position: absolute; top: -80px; left: 50%; transform: translateX(-50%);
+            width: 300px; height: 300px;
+            background: radial-gradient(circle, rgba(232,168,56,0.12) 0%, transparent 70%);
+            pointer-events: none;
+            animation: rhGlowPulse 4s ease-in-out infinite;
+        }
+        .rh-glow-2 {
+            position: absolute; bottom: -60px; right: -60px;
+            width: 200px; height: 200px;
+            background: radial-gradient(circle, rgba(212,118,42,0.06) 0%, transparent 70%);
+            pointer-events: none;
+            animation: rhGlowPulse2 5s ease-in-out infinite reverse;
+        }
+        @keyframes rhGlowPulse {
+            0%, 100% { opacity: 0.5; transform: translateX(-50%) scale(1); }
+            50% { opacity: 1; transform: translateX(-50%) scale(1.15); }
+        }
+        @keyframes rhGlowPulse2 {
+            0%, 100% { opacity: 0.3; transform: scale(1); }
+            50% { opacity: 0.8; transform: scale(1.2); }
+        }
+        .rh-top {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 16px; position: relative; z-index: 1;
+        }
+        .rh-station {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 13px; font-weight: 700;
+        }
+        .rh-station i { color: var(--primary); font-size: 14px; }
+        .rh-badges { display: flex; align-items: center; gap: 8px; }
+        .rh-live-badge {
+            display: flex; align-items: center; gap: 5px;
+            padding: 4px 10px; border-radius: 20px;
+            font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+            transition: all 0.3s ease;
+        }
+        .rh-live-badge.live { background: rgba(74,222,128,0.12); color: var(--success); }
+        .rh-live-badge.off { background: rgba(107,107,107,0.12); color: var(--text-tertiary); }
+        .rh-live-dot {
+            width: 6px; height: 6px; border-radius: 50%;
+        }
+        .rh-live-badge.live .rh-live-dot { background: var(--success); animation: livePulse 1.5s ease-in-out infinite; }
+        .rh-live-badge.off .rh-live-dot { background: var(--text-tertiary); }
+        .rh-listener-badge {
+            display: flex; align-items: center; gap: 4px;
+            padding: 4px 10px; border-radius: 20px;
+            background: var(--surface); border: 1px solid var(--border);
+            font-size: 11px; font-weight: 600; color: var(--text-secondary);
+        }
+        .rh-listener-badge i { font-size: 10px; color: var(--primary); }
+        .rh-main {
+            display: flex; align-items: center; gap: 18px;
+            margin-bottom: 14px; position: relative; z-index: 1;
+        }
+        .rh-art-wrap {
+            position: relative; flex-shrink: 0;
+            width: 100px; height: 100px;
+        }
+        .rh-art-ring {
+            position: absolute; inset: -4px;
+            border-radius: 50%;
+            border: 2px solid rgba(232,168,56,0.2);
+            animation: rhRingSpin 8s linear infinite;
+        }
+        @keyframes rhRingSpin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .rh-art-ring::before {
+            content: ''; position: absolute; top: -2px; left: 50%; transform: translateX(-50%);
+            width: 8px; height: 8px; border-radius: 50%;
+            background: var(--primary);
+            box-shadow: 0 0 12px rgba(232,168,56,0.6);
+        }
+        .rh-art {
+            width: 100%; height: 100%;
+            border-radius: 50%; overflow: hidden;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 0 0 2px rgba(232,168,56,0.1);
+            transition: all 0.5s ease;
+            position: relative;
+        }
+        .rh-art.spinning { animation: rhSpin 12s linear infinite; }
+        @keyframes rhSpin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .rh-art img { width: 100%; height: 100%; object-fit: cover; }
+        .rh-art-fallback {
+            width: 100%; height: 100%;
+            background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+            display: flex; align-items: center; justify-content: center;
+            font-size: 38px; color: #fff;
+        }
+        .rh-vinyl-lines {
+            position: absolute; inset: 0; border-radius: 50%;
+            background: conic-gradient(from 0deg, transparent 0deg, rgba(255,255,255,0.03) 10deg, transparent 20deg, rgba(255,255,255,0.03) 30deg, transparent 40deg, rgba(255,255,255,0.03) 50deg, transparent 60deg, rgba(255,255,255,0.03) 70deg, transparent 80deg, rgba(255,255,255,0.03) 90deg, transparent 100deg, rgba(255,255,255,0.03) 110deg, transparent 120deg, rgba(255,255,255,0.03) 130deg, transparent 140deg, rgba(255,255,255,0.03) 150deg, transparent 160deg, rgba(255,255,255,0.03) 170deg, transparent 180deg, rgba(255,255,255,0.03) 190deg, transparent 200deg, rgba(255,255,255,0.03) 210deg, transparent 220deg, rgba(255,255,255,0.03) 230deg, transparent 240deg, rgba(255,255,255,0.03) 250deg, transparent 260deg, rgba(255,255,255,0.03) 270deg, transparent 280deg, rgba(255,255,255,0.03) 290deg, transparent 300deg, rgba(255,255,255,0.03) 310deg, transparent 320deg, rgba(255,255,255,0.03) 330deg, transparent 340deg, rgba(255,255,255,0.03) 350deg, transparent 360deg);
+            pointer-events: none; z-index: 2;
+        }
+        .rh-eq {
+            position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 3px; align-items: flex-end;
+            z-index: 3;
+        }
+        .rh-eq span {
+            width: 4px; background: var(--primary); border-radius: 2px;
+            animation: rhEqBounce 0.6s ease-in-out infinite alternate;
+        }
+        .rh-eq span:nth-child(1) { height: 10px; animation-delay: 0s; }
+        .rh-eq span:nth-child(2) { height: 16px; animation-delay: 0.15s; }
+        .rh-eq span:nth-child(3) { height: 12px; animation-delay: 0.3s; }
+        .rh-eq span:nth-child(4) { height: 8px; animation-delay: 0.45s; }
+        @keyframes rhEqBounce {
+            from { transform: scaleY(0.5); }
+            to { transform: scaleY(1); }
+        }
+        .rh-info { flex: 1; min-width: 0; }
+        .rh-track-name {
+            font-size: 18px; font-weight: 800;
+            letter-spacing: -0.3px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .rh-track-artist {
+            font-size: 14px; color: var(--primary-light);
+            margin-top: 4px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .rh-source {
+            font-size: 11px; color: var(--text-tertiary);
+            margin-top: 6px; display: flex; align-items: center; gap: 4px;
+        }
+        .rh-source i { color: var(--primary); font-size: 10px; }
+        .rh-progress-wrap {
+            margin-bottom: 14px; position: relative; z-index: 1;
+        }
+        .rh-progress-bar {
+            width: 100%; height: 4px;
+            background: rgba(255,255,255,0.06);
+            border-radius: 3px; overflow: hidden;
+        }
+        .rh-progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--gradient-start), var(--gradient-end));
+            border-radius: 3px;
+            transition: width 1s ease;
+            position: relative;
+        }
+        .rh-progress-glow {
+            position: absolute; right: 0; top: -2px;
+            width: 8px; height: 8px; border-radius: 50%;
+            background: var(--primary);
+            box-shadow: 0 0 12px rgba(232,168,56,0.6);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .rh-progress-bar:hover .rh-progress-glow { opacity: 1; }
+        .rh-progress-time {
+            display: flex; justify-content: space-between;
+            font-size: 11px; color: var(--text-tertiary);
+            margin-top: 4px; font-weight: 500;
+        }
+        .rh-actions {
+            display: flex; align-items: center; justify-content: center;
+            gap: 20px; position: relative; z-index: 1;
+            margin-bottom: 12px;
+        }
+        .rh-play-btn {
+            width: 56px; height: 56px; border-radius: 50%;
+            background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+            border: none; color: #fff; font-size: 22px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; position: relative;
+            box-shadow: 0 6px 24px rgba(232,168,56,0.35);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .rh-play-btn:active { transform: scale(0.88); }
+        .rh-play-btn.playing {
+            box-shadow: 0 6px 28px rgba(232,168,56,0.4), 0 0 40px rgba(232,168,56,0.1);
+        }
+        .rh-play-ring {
+            position: absolute; inset: -6px; border-radius: 50%;
+            border: 1.5px solid rgba(232,168,56,0.15);
+            animation: rhRingPulse 2s ease-in-out infinite;
+        }
+        .rh-play-btn.playing .rh-play-ring {
+            border-color: rgba(74,222,128,0.3);
+        }
+        @keyframes rhRingPulse {
+            0%, 100% { transform: scale(1); opacity: 0.5; }
+            50% { transform: scale(1.1); opacity: 0; }
+        }
+        .rh-shuffle-btn, .rh-expand-btn {
+            width: 40px; height: 40px; border-radius: 50%;
+            background: var(--surface); border: 1px solid var(--border);
+            color: var(--text-secondary); font-size: 14px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: all 0.2s ease;
+        }
+        .rh-shuffle-btn:active, .rh-expand-btn:active {
+            background: var(--surface-elevated); transform: scale(0.88);
         }
 
         /* ========== TAB BAR ========== */
@@ -1497,8 +1728,8 @@ export default function AdminRadioPage() {
         <header className="radio-header">
           <div className="radio-header-logo"><i className="fas fa-tower-broadcast"></i></div>
           <div className="radio-header-info">
-            <div className="radio-header-name">Kingdom Seekers Radio</div>
-            <div className="radio-header-sub">Kingdom Seekers Church Nakuru Radio Station</div>
+            <div className="radio-header-name">{overviewNP?.station?.name || radioConfig.stationName}</div>
+            <div className="radio-header-sub">{radioConfig.description}</div>
           </div>
           <div className="radio-header-right">
             <div className={`on-air-badge ${isLive ? "live" : "off"}`}>
@@ -1513,27 +1744,99 @@ export default function AdminRadioPage() {
         </header>
 
         {/* ========== NOW PLAYING BAR ========== */}
-        <div className="now-playing-bar">
-          <div className="npb-thumb">
-            <img src="https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=60&h=60&fit=crop" alt="Art" />
+        {/* ===== PREMIUM RADIO HERO CARD ===== */}
+        <div className="rh-hero" style={{ margin: "8px 16px 0" }}>
+          {/* Animated background glow layers */}
+          <div className="rh-glow-1"></div>
+          <div className="rh-glow-2"></div>
+
+          {/* Top row: station name + badges */}
+          <div className="rh-top">
+            <div className="rh-station">
+              <i className="fas fa-tower-broadcast"></i>
+              <span>{overviewNP?.station?.name || radioConfig.stationName}</span>
+            </div>
+            <div className="rh-badges">
+              <div className={`rh-live-badge ${isPlaying || isLive ? "live" : "off"}`}>
+                <span className="rh-live-dot"></span>
+                {isPlaying || isLive ? "Live" : "Off Air"}
+              </div>
+              <div className="rh-listener-badge">
+                <i className="fas fa-headphones"></i>
+                {listeners}
+              </div>
+            </div>
           </div>
-          <div className="npb-info">
-            <div className="npb-title">Amazing Grace (My Chains Are Gone)</div>
-            <div className="npb-artist">Chris Tomlin</div>
+
+          {/* Main content: album art + info */}
+          <div className="rh-main">
+            <div className="rh-art-wrap">
+              <div className="rh-art-ring"></div>
+              <div className={`rh-art ${isPlaying ? "spinning" : ""}`}>
+                {overviewNP?.nowPlaying?.song?.albumArt ? (
+                  <img src={overviewNP.nowPlaying.song.albumArt} alt="" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                ) : (
+                  <div className="rh-art-fallback">
+                    <i className="fas fa-radio"></i>
+                  </div>
+                )}
+              </div>
+              {/* Equalizer overlay when playing */}
+              {isPlaying && (
+                <div className="rh-eq">
+                  <span></span><span></span><span></span><span></span>
+                </div>
+              )}
+              {/* Spinning vinyl lines when playing */}
+              {isPlaying && <div className="rh-vinyl-lines"></div>}
+            </div>
+
+            <div className="rh-info">
+              <div className="rh-track-name">{overviewNP?.nowPlaying?.song?.title || "Station Offline"}</div>
+              <div className="rh-track-artist">{overviewNP?.nowPlaying?.song?.artist || "Not currently playing"}</div>
+              <div className="rh-source">
+                <i className="fas fa-radio"></i> {overviewNP?.station?.name || "Radio"}
+              </div>
+            </div>
           </div>
-          <button
-            className="npb-player-btn"              onClick={() => {
-              const newPlaying = !isPlaying;
-              setIsPlaying(newPlaying);
-              window.dispatchEvent(
-                new CustomEvent("show-toast", {
-                  detail: { title: newPlaying ? "Playing" : "Paused", message: `Stream ${newPlaying ? "resumed" : "paused"}`, type: "info", duration: 2000 },
-                })
-              );
-            }}
-          >
-            <i className={`fas ${isPlaying ? "fa-pause" : "fa-play"}`}></i>
-          </button>
+
+          {/* Progress bar */}
+          {overviewNP?.nowPlaying && (
+          <div className="rh-progress-wrap">
+            <div className="rh-progress-bar">
+              <div className="rh-progress-fill" style={{ width: `${overviewNP.nowPlaying.duration > 0 ? Math.min(100, (overviewNP.nowPlaying.elapsed / overviewNP.nowPlaying.duration) * 100) : 0}%` }}>
+                <div className="rh-progress-glow"></div>
+              </div>
+            </div>
+            <div className="rh-progress-time">
+              <span>{overviewNP.nowPlaying.duration > 0 ? `${Math.floor(overviewNP.nowPlaying.elapsed / 60)}:${String(Math.floor(overviewNP.nowPlaying.elapsed % 60)).padStart(2, "0")}` : "0:00"}</span>
+              <span>{overviewNP.nowPlaying.duration > 0 ? `${Math.floor(overviewNP.nowPlaying.duration / 60)}:${String(Math.floor(overviewNP.nowPlaying.duration % 60)).padStart(2, "0")}` : "0:00"}</span>
+            </div>
+          </div>
+          )}
+
+          {/* Controls row */}
+          <div className="rh-actions">
+            <button className="rh-shuffle-btn" title="Shuffle">
+              <i className="fas fa-shuffle"></i>
+            </button>
+            <button
+              className={`rh-play-btn ${isPlaying ? "playing" : ""}`}
+              onClick={() => {
+                const streamUrl = overviewNP?.station?.listenUrl || radioConfig.streamUrl;
+                if (streamUrl) {
+                  audio.toggle(streamUrl, Number(radioConfig.stationId || getStationId()));
+                }
+              }}
+              disabled={!overviewNP?.station?.listenUrl && !radioConfig.streamUrl}
+            >
+              <i className={`fas fa-${isPlaying ? "pause" : "play"}`}></i>
+              <div className="rh-play-ring"></div>
+            </button>
+            <button className="rh-expand-btn" title="Full Player" onClick={() => setActiveTab("overview")}>
+              <i className="fas fa-expand"></i>
+            </button>
+          </div>
         </div>
 
         {/* ========== TAB BAR ========== */}

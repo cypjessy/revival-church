@@ -13,6 +13,7 @@ interface NavTab {
 const tabs: NavTab[] = [
   { tab: "dashboard", icon: "fa-chart-line", label: "Dashboard" },
   { tab: "radio", icon: "fa-tower-broadcast", label: "Radio" },
+  { tab: "tv", icon: "fa-tv", label: "TV" },
   { tab: "meetings", icon: "fa-people-group", label: "Meetings" },
   { tab: "content", icon: "fa-photo-film", label: "Content" },
   { tab: "members", icon: "fa-users", label: "Members", showBadge: true },
@@ -21,6 +22,7 @@ const tabs: NavTab[] = [
 const tabRoutes: Record<string, string> = {
   dashboard: "/admin",
   radio: "/admin/radio",
+  tv: "/admin/tv",
   meetings: "/admin/meetings",
   content: "/admin/content",
   members: "/admin/members",

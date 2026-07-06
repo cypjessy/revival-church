@@ -26,6 +26,7 @@ export default function AdminMeetingHostPage() {
   const [audioParticipants, setAudioParticipants] = useState<Map<string, string[]>>(new Map()); // identity → trackSid[]
   const [muteloading, setMuteloading] = useState<Set<string>>(new Set());
   const [micEnabled, setMicEnabled] = useState(false);
+  const [audioEnabled, setAudioEnabled] = useState(false);
   const roomRef = useRef<Room | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const meetingRef = useRef<Meeting | null>(null);
@@ -70,12 +71,6 @@ export default function AdminMeetingHostPage() {
       const room = new Room({
         adaptiveStream: true,
         dynacast: true,
-        audioCaptureDefaults: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
       });
 
       room.on(RoomEvent.ParticipantConnected, (p) => {
@@ -110,6 +105,15 @@ export default function AdminMeetingHostPage() {
         }
       });
 
+      // CRITICAL: Attach remote audio tracks to <audio> elements so sound plays
+      room.on(RoomEvent.TrackSubscribed, (track) => {
+        if (track.kind === Track.Kind.Audio) {
+          const audioEl = track.attach();
+          audioEl.style.display = 'none';
+          document.body.appendChild(audioEl);
+        }
+      });
+
       room.on(RoomEvent.TrackUnpublished, (trackPub, p) => {
         if (trackPub.kind === Track.Kind.Audio && p.identity !== identity) {
           setAudioParticipants((prev) => {
@@ -137,18 +141,15 @@ export default function AdminMeetingHostPage() {
 
       await room.connect(url, token);
 
-      // Start audio context for remote track playback (best-effort for desktop)
-      room.startAudio().catch(() => {});
+      // Best-effort mic enable — primes the permission system on Android.
+      // If blocked (no user gesture), user can tap the mic button later.
+      room.localParticipant.setMicrophoneEnabled(true).catch(() => {});
 
-      // On mobile/Android WebView, audio autoplay is blocked until a user gesture.
-      // Set up a one-tap handler to resume AudioContext on first interaction.
-      const startAudioOnce = () => {
-        room.startAudio().catch(() => {});
-        document.removeEventListener('click', startAudioOnce);
-        document.removeEventListener('touchstart', startAudioOnce);
-      };
-      document.addEventListener('click', startAudioOnce, { once: true });
-      document.addEventListener('touchstart', startAudioOnce, { once: true });
+      // Audio is not enabled yet — user must tap "Start Speaking" button.
+      // This ensures startAudio() and setMicrophoneEnabled() are called with
+      // a proper user gesture on Android WebView.
+
+      setMicEnabled(false);
 
       // Scan existing participants for audio tracks
       for (const [, p] of room.remoteParticipants) {
@@ -223,6 +224,22 @@ export default function AdminMeetingHostPage() {
     } finally {
       setMuteloading(new Set());
     }
+  };
+
+  const handleStartSpeaking = async () => {
+    const room = roomRef.current;
+    if (!room) return;
+    // Enable audio output (resume AudioContext with user gesture)
+    room.startAudio().catch(() => {});
+    // Enable microphone input
+    try {
+      await room.localParticipant.setMicrophoneEnabled(true);
+      setMicEnabled(true);
+    } catch (e) {
+      console.error("Mic enable failed on start:", e);
+      // Mic might still work if the user taps the mic button later
+    }
+    setAudioEnabled(true);
   };
 
   const toggleMic = async () => {
@@ -892,6 +909,44 @@ export default function AdminMeetingHostPage() {
           <div className="bg-orb"></div>
         </div>
 
+        {connected && !audioEnabled ? (
+          <div style={{
+            position: "relative", zIndex: 1, flex: 1, display: "flex",
+            flexDirection: "column", alignItems: "center", justifyContent: "center",
+            padding: 40, textAlign: "center", gap: 24
+          }}>
+            <div style={{
+              width: 100, height: 100, borderRadius: "50%",
+              background: "linear-gradient(135deg, var(--gradient-start), var(--gradient-end))",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              boxShadow: "0 0 50px rgba(232,168,56,0.3)",
+              animation: "pulseLoad 1.5s ease-in-out infinite"
+            }}>
+              <i className="fas fa-microphone" style={{ fontSize: 40, color: "#fff" }}></i>
+            </div>
+            <h1 style={{ fontSize: 20, fontWeight: 800, margin: 0 }}>{meeting?.title}</h1>
+            <p style={{ fontSize: 14, color: "var(--text-secondary)", margin: 0, lineHeight: 1.5, maxWidth: 300 }}>
+              Tap the button below to enable your microphone and start speaking
+            </p>
+            <button
+              onClick={handleStartSpeaking}
+              style={{
+                padding: "16px 48px", borderRadius: 100, border: "none",
+                background: "linear-gradient(135deg, var(--gradient-start), var(--gradient-end))",
+                color: "#fff", fontSize: 17, fontWeight: 800, cursor: "pointer",
+                boxShadow: "0 8px 32px rgba(232,168,56,0.35)",
+                display: "flex", alignItems: "center", gap: 10,
+                transition: "all 0.2s ease"
+              }}
+            >
+              <i className="fas fa-broadcast-tower"></i>
+              Start Speaking
+            </button>
+            <p style={{ fontSize: 12, color: "var(--text-tertiary)", margin: 0 }}>
+              You'll be able to hear and speak in the meeting
+            </p>
+          </div>
+        ) : (
         <div className="host-content">
           {/* TOP BAR */}
           <div className="top-bar">
@@ -1068,7 +1123,8 @@ export default function AdminMeetingHostPage() {
               </button>
             </div>
           </div>
-        </div>
+          </div>
+        )}
       </div>
     </>
   );

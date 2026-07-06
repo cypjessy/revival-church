@@ -44,14 +44,18 @@ export default function RadioPage() {
   const stationName = settings?.name || "Kingdom Seekers Radio";
   // YouTube live indicator removed
 
-  // Push now-playing metadata to Android media notification
+  // Push now-playing metadata to Android media notification (safe wrapped)
   useEffect(() => {
-    if (audio.isPlaying) {
-      const np = npData?.nowPlaying;
-      const title = np?.song?.title || stationName;
-      const artist = np?.song?.artist || "Kingdom Seekers Church Nakuru";
-      const albumArt = np?.song?.albumArt;
-      audio.updateMediaSession(title, artist, albumArt);
+    try {
+      if (audio.isPlaying) {
+        const np = npData?.nowPlaying;
+        const title = np?.song?.title || stationName;
+        const artist = np?.song?.artist || "Kingdom Seekers Church Nakuru";
+        const albumArt = np?.song?.albumArt;
+        audio.updateMediaSession(title, artist, albumArt);
+      }
+    } catch {
+      // Media notification is optional — ignore failures
     }
   }, [audio.isPlaying, audio.currentStationId, npData?.nowPlaying?.song?.title, npData?.nowPlaying?.song?.artist, npData?.nowPlaying?.song?.albumArt, audio.updateMediaSession, stationName]);
 

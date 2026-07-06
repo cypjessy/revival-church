@@ -564,7 +564,22 @@ export default function AdminPage() {
         html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text-primary); }
 
         .app-container { height: 100%; display: flex; flex-direction: column; position: relative; overflow: hidden; }
-        @media (min-width: 480px) { .app-container { max-width: 480px; margin: 0 auto; border-left: 1px solid var(--border); border-right: 1px solid var(--border); } }
+        @media (min-width: 480px) { .app-container { max-width: 480px; margin: 0 auto; } }
+        @media (min-width: 768px) {
+            .stats-grid { grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 16px 24px; }
+            .dash-header { padding: 10px 24px; }
+            .dash-grid { padding: 0 24px; gap: 20px; }
+            .dash-nowplaying-strip { padding: 10px 24px; }
+            .activity-filter { gap: 8px; }
+            .chart-period-toggle { gap: 6px; }
+            .widget-card { padding: 22px; }
+        }
+        @media (min-width: 1024px) {
+            .stats-grid { grid-template-columns: repeat(4, 1fr); padding: 16px 32px; }
+            .dash-header { padding: 12px 32px; }
+            .dash-grid { padding: 0 32px; }
+            .dash-nowplaying-strip { padding: 12px 32px; }
+        }
 
         .status-bar { height: env(safe-area-inset-top, 24px); min-height: 24px; background: var(--bg); flex-shrink: 0; }
 
@@ -708,7 +723,10 @@ export default function AdminPage() {
             display: flex; flex-direction: column; gap: 16px;
         }
         @media (min-width: 640px) {
-            .dash-grid { display: grid; grid-template-columns: 1fr 320px; gap: 16px; }
+            .dash-grid { display: grid; grid-template-columns: 1fr 320px; gap: 20px; }
+        }
+        @media (min-width: 1024px) {
+            .dash-grid { grid-template-columns: 1fr 380px; }
         }
 
         .dash-section { margin-bottom: 0; }
@@ -1151,6 +1169,9 @@ export default function AdminPage() {
         @media (min-width: 480px) {
             .qa-float { max-width: 480px; margin: 0 auto; }
         }
+        @media (min-width: 768px) {
+            .qa-float { left: 72px; padding: 10px 16px; gap: 8px; }
+        }
         .qa-float-btn {
             flex-shrink: 0; display: flex; align-items: center; gap: 6px;
             padding: 8px 14px; border-radius: 12px; border: 1px solid var(--border);
@@ -1231,6 +1252,9 @@ export default function AdminPage() {
         }
         @media (min-width: 480px) {
             .bottom-nav { max-width: 480px; margin: 0 auto; }
+        }
+        @media (min-width: 768px) {
+            .bottom-nav { left: 72px; max-width: calc(100% - 72px); }
         }
         .nav-item {
             display: flex; flex-direction: column; align-items: center; gap: 4px;
