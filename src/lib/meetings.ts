@@ -400,13 +400,12 @@ export function generateRoomName(meetingId: string): string {
 }
 
 /**
- * Mute a remote participant's audio by calling the LiveKit Server REST API directly.
- * Credentials are already exposed client-side via NEXT_PUBLIC_* env vars.
+ * Mute a remote participant by revoking their publish permission via LiveKit REST API.
+ * This prevents them from re-enabling their mic (unlike `muted: true` which is one-time).
  */
 export async function muteParticipant(
   roomName: string,
   identity: string,
-  _trackSid?: string
 ): Promise<void> {
   const apiKey = getLiveKitApiKey();
   const apiSecret = getLiveKitApiSecret();
@@ -416,7 +415,6 @@ export async function muteParticipant(
     throw new Error("LiveKit credentials not configured");
   }
 
-  // Build a server admin token (short-lived, grants room admin)
   const secret = new TextEncoder().encode(apiSecret);
   const adminToken = await new SignJWT({
     iss: apiKey,
@@ -434,19 +432,19 @@ export async function muteParticipant(
     .setExpirationTime("5m")
     .sign(secret);
 
-  // Derive the HTTP base from the WebSocket URL — use same host:port for LiveKit HTTP API
   const httpBase = livekitUrl.replace(/^wss?:\/\//, "https://");
 
-  // Use UpdateParticipant (mutes all tracks) when no specific track_sid, otherwise MutePublishedTrack
-  const endpoint = _trackSid
-    ? `${httpBase}/twirp/livekit.RoomService/MutePublishedTrack`
-    : `${httpBase}/twirp/livekit.RoomService/UpdateParticipant`;
+  const body = JSON.stringify({
+    room: roomName,
+    identity,
+    permission: {
+      canPublish: false,
+      canSubscribe: true,
+      canPublishData: false,
+    },
+  });
 
-  const body = _trackSid
-    ? JSON.stringify({ room: roomName, identity, track_sid: _trackSid, muted: true })
-    : JSON.stringify({ room: roomName, identity, muted: true });
-
-  const res = await fetch(endpoint, {
+  const res = await fetch(`${httpBase}/twirp/livekit.RoomService/UpdateParticipant`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -458,6 +456,122 @@ export async function muteParticipant(
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`Failed to mute participant: ${res.status} ${text}`);
+  }
+}
+
+/**
+ * Restore a participant's ability to publish audio (undoes muteParticipant).
+ */
+export async function unmuteParticipant(
+  roomName: string,
+  identity: string,
+): Promise<void> {
+  const apiKey = getLiveKitApiKey();
+  const apiSecret = getLiveKitApiSecret();
+  const livekitUrl = getLiveKitUrl();
+
+  if (!apiKey || !apiSecret || !livekitUrl) {
+    throw new Error("LiveKit credentials not configured");
+  }
+
+  const secret = new TextEncoder().encode(apiSecret);
+  const adminToken = await new SignJWT({
+    iss: apiKey,
+    sub: "admin",
+    video: {
+      room: roomName,
+      roomAdmin: true,
+      roomJoin: false,
+      canPublish: false,
+      canSubscribe: false,
+    },
+  })
+    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+    .setIssuedAt()
+    .setExpirationTime("5m")
+    .sign(secret);
+
+  const httpBase = livekitUrl.replace(/^wss?:\/\//, "https://");
+
+  const body = JSON.stringify({
+    room: roomName,
+    identity,
+    permission: {
+      canPublish: true,
+      canSubscribe: true,
+      canPublishData: true,
+    },
+  });
+
+  const res = await fetch(`${httpBase}/twirp/livekit.RoomService/UpdateParticipant`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${adminToken}`,
+    },
+    body,
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Failed to unmute participant: ${res.status} ${text}`);
+  }
+}
+
+/**
+ * Update a participant's metadata on a LiveKit room via the REST API.
+ * Used by the admin to clear handRaised status when approving/dismissing.
+ */
+export async function updateParticipantMetadata(
+  roomName: string,
+  identity: string,
+  metadata: object,
+): Promise<void> {
+  const apiKey = getLiveKitApiKey();
+  const apiSecret = getLiveKitApiSecret();
+  const livekitUrl = getLiveKitUrl();
+
+  if (!apiKey || !apiSecret || !livekitUrl) {
+    throw new Error("LiveKit credentials not configured");
+  }
+
+  const secret = new TextEncoder().encode(apiSecret);
+  const adminToken = await new SignJWT({
+    iss: apiKey,
+    sub: "admin",
+    video: {
+      room: roomName,
+      roomAdmin: true,
+      roomJoin: false,
+      canPublish: false,
+      canSubscribe: false,
+    },
+  })
+    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+    .setIssuedAt()
+    .setExpirationTime("5m")
+    .sign(secret);
+
+  const httpBase = livekitUrl.replace(/^wss?:\/\//, "https://");
+
+  const body = JSON.stringify({
+    room: roomName,
+    identity,
+    metadata: JSON.stringify(metadata),
+  });
+
+  const res = await fetch(`${httpBase}/twirp/livekit.RoomService/UpdateParticipant`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${adminToken}`,
+    },
+    body,
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Failed to update participant metadata: ${res.status} ${text}`);
   }
 }
 

@@ -2252,10 +2252,25 @@ export default function AdminContentPage() {
                 <span className="iv-counter">{viewerIndex + 1} / {displayedEntryPhotos.length}</span>
               </div>
               <div className="iv-top-right">
-                <button className="iv-action-btn" onClick={(e) => {
+                <button className="iv-action-btn" onClick={async (e) => {
                   e.stopPropagation();
                   const photo = displayedEntryPhotos[viewerIndex];
-                  if (photo?.cdnUrl) {
+                  if (!photo?.cdnUrl) return;
+                  try {
+                    const { Filesystem, Directory } = await import("@capacitor/filesystem");
+                    const response = await fetch(photo.cdnUrl);
+                    const blob = await response.blob();
+                    const reader = new FileReader();
+                    reader.onloadend = async () => {
+                      const base64 = reader.result as string;
+                      const filename = `${(photo.title || "photo").replace(/[^a-zA-Z0-9]/g, "_")}.jpg`;
+                      await Filesystem.writeFile({ path: filename, data: base64, directory: Directory.Documents });
+                      window.dispatchEvent(new CustomEvent("show-toast", {
+                        detail: { title: "Saved", message: "Photo saved to device", type: "success", duration: 2000 },
+                      }));
+                    };
+                    reader.readAsDataURL(blob);
+                  } catch {
                     const link = document.createElement("a");
                     link.href = photo.cdnUrl;
                     link.download = photo.title || "photo";

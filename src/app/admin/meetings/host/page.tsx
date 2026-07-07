@@ -4,9 +4,10 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import ToastBridge from "@/components/dashboard/ToastBridge";
+import ReactionsOverlay from "@/components/meetings/ReactionsOverlay";
 import { useAppStore } from "@/lib/useAppStore";
 import PremiumTopBar from "@/components/shared/PremiumTopBar";
-import { getMeeting, updateMeeting, generateLiveKitToken, muteParticipant, getAgenda, toggleAgendaItem, getMinutes, saveMinutes, getActionItems, createActionItem, completeActionItem } from "@/lib/meetings";
+import { getMeeting, updateMeeting, generateLiveKitToken, muteParticipant, unmuteParticipant, updateParticipantMetadata, getAgenda, toggleAgendaItem, getMinutes, saveMinutes, getActionItems, createActionItem, completeActionItem, getAttendance } from "@/lib/meetings";
 import type { Meeting, AgendaItem, ActionItem } from "@/lib/meetings";
 import { Room, RoomEvent, Track } from "livekit-client";
 
@@ -26,6 +27,12 @@ export default function AdminMeetingHostPage() {
   const [elapsed, setElapsed] = useState(0);
   const [audioParticipants, setAudioParticipants] = useState<Map<string, string[]>>(new Map()); // identity → trackSid[]
   const [muteloading, setMuteloading] = useState<Set<string>>(new Set());
+  const [mutedParticipants, setMutedParticipants] = useState<Set<string>>(new Set());
+  const [participantMetadata, setParticipantMetadata] = useState<Map<string, any>>(new Map());
+  const [handRaisedParticipants, setHandRaisedParticipants] = useState<Set<string>>(new Set());
+  const [handRaiseQueue, setHandRaiseQueue] = useState<Map<string, number>>(new Map()); // identity → raisedAt
+  const [timeLimit, setTimeLimit] = useState(180); // seconds per speaker
+  const [speakingTimer, setSpeakingTimer] = useState<{ identity: string; remaining: number; limit: number } | null>(null);
   const [micEnabled, setMicEnabled] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [agendaItems, setAgendaItems] = useState<AgendaItem[]>([]);
@@ -41,6 +48,7 @@ export default function AdminMeetingHostPage() {
   const minutesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const roomRef = useRef<Room | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const speakingTimerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const meetingRef = useRef<Meeting | null>(null);
 
   const identity = userDoc?.uid || user?.uid || `admin-${Date.now()}`;
@@ -128,6 +136,8 @@ export default function AdminMeetingHostPage() {
             }
             return next;
           });
+          // If they managed to re-publish, they're no longer admin-muted
+          setMutedParticipants((prev) => { const n = new Set(prev); n.delete(p.identity); return n; });
         }
       });
 
@@ -155,11 +165,51 @@ export default function AdminMeetingHostPage() {
         }
       });
 
+      // Track participant metadata changes (hand raise, etc.)
+      room.on(RoomEvent.ParticipantMetadataChanged, (metadata: string | undefined, participant) => {
+        if (participant.identity === identity) return;
+        let data: any = {};
+        try { data = metadata ? JSON.parse(metadata) : {}; } catch { data = {}; }
+        setParticipantMetadata((prev) => {
+          const next = new Map(prev);
+          next.set(participant.identity, data);
+          return next;
+        });
+        if (data.handRaised) {
+          setHandRaisedParticipants((prev) => new Set(prev).add(participant.identity));
+          // Add to queue with timestamp (only if not already queued)
+          setHandRaiseQueue((prev) => {
+            if (prev.has(participant.identity)) return prev;
+            const next = new Map(prev);
+            next.set(participant.identity, Date.now());
+            return next;
+          });
+        } else {
+          setHandRaisedParticipants((prev) => {
+            const n = new Set(prev);
+            n.delete(participant.identity);
+            return n;
+          });
+          setHandRaiseQueue((prev) => {
+            const n = new Map(prev);
+            n.delete(participant.identity);
+            return n;
+          });
+        }
+      });
+
       room.on(RoomEvent.Disconnected, () => {
         setConnected(false);
         setParticipants([]);
         setSpeakingParticipants(new Set());
         setAudioParticipants(new Map());
+        setMutedParticipants(new Set());
+        setHandRaisedParticipants(new Set());
+        setHandRaiseQueue(new Map());
+        setParticipantMetadata(new Map());
+        setSpeakingTimer(null);
+        if (speakingTimerIntervalRef.current) clearInterval(speakingTimerIntervalRef.current);
+        speakingTimerIntervalRef.current = null;
         roomRef.current = null;
         setMicEnabled(false);
         if (timerRef.current) clearInterval(timerRef.current);
@@ -177,7 +227,7 @@ export default function AdminMeetingHostPage() {
 
       setMicEnabled(false);
 
-      // Scan existing participants for audio tracks
+      // Scan existing participants for audio tracks and metadata
       for (const [, p] of room.remoteParticipants) {
         const audioTracks: string[] = [];
         for (const [, pub] of p.trackPublications) {
@@ -191,6 +241,21 @@ export default function AdminMeetingHostPage() {
             next.set(p.identity, audioTracks);
             return next;
           });
+        }
+        // Check existing metadata for hand raise
+        if (p.metadata) {
+          try {
+            const data = JSON.parse(p.metadata);
+            if (data.handRaised) {
+              setHandRaisedParticipants((prev) => new Set(prev).add(p.identity));
+              setHandRaiseQueue((prev) => {
+                if (prev.has(p.identity)) return prev;
+                const n = new Map(prev);
+                n.set(p.identity, 0); // timestamp 0 = before admin joined
+                return n;
+              });
+            }
+          } catch {}
         }
       }
 
@@ -228,11 +293,124 @@ export default function AdminMeetingHostPage() {
     try {
       await muteParticipant(roomName, pIdentity);
       setAudioParticipants((prev) => { const n = new Map(prev); n.delete(pIdentity); return n; });
+      setMutedParticipants((prev) => new Set(prev).add(pIdentity));
       showToast("Muted", `${pIdentity} microphone closed`, "info", 2500);
     } catch (e) {
       showToast("Error", e instanceof Error ? e.message : "Failed to mute", "error", 3000);
     } finally {
       setMuteloading((prev) => { const n = new Set(prev); n.delete(pIdentity); return n; });
+    }
+  };
+
+  const handleUnmuteParticipant = async (pIdentity: string) => {
+    const roomName = meetingRef.current?.roomName;
+    if (!roomName) return;
+    setMuteloading((prev) => new Set(prev).add(pIdentity));
+    try {
+      await unmuteParticipant(roomName, pIdentity);
+      setMutedParticipants((prev) => { const n = new Set(prev); n.delete(pIdentity); return n; });
+      showToast("Unmuted", `${pIdentity} can now speak`, "success", 2500);
+    } catch (e) {
+      showToast("Error", e instanceof Error ? e.message : "Failed to unmute", "error", 3000);
+    } finally {
+      setMuteloading((prev) => { const n = new Set(prev); n.delete(pIdentity); return n; });
+    }
+  };
+
+  const handleAllowHandRaise = async (pIdentity: string) => {
+    const roomName = meetingRef.current?.roomName;
+    if (!roomName) return;
+    setMuteloading((prev) => new Set(prev).add(pIdentity));
+    try {
+      await unmuteParticipant(roomName, pIdentity);
+      await updateParticipantMetadata(roomName, pIdentity, {});
+      showToast("Approved", `${pIdentity} can now speak`, "success", 2500);
+    } catch (e) {
+      showToast("Error", e instanceof Error ? e.message : "Failed to approve", "error", 3000);
+    } finally {
+      setMuteloading((prev) => { const n = new Set(prev); n.delete(pIdentity); return n; });
+    }
+  };
+
+  const handleDismissHandRaise = async (pIdentity: string) => {
+    const roomName = meetingRef.current?.roomName;
+    if (!roomName) return;
+    try {
+      await updateParticipantMetadata(roomName, pIdentity, {});
+      showToast("Dismissed", `${pIdentity} hand raise dismissed`, "info", 2500);
+    } catch (e) {
+      showToast("Error", e instanceof Error ? e.message : "Failed to dismiss", "error", 3000);
+    }
+  };
+
+  const handleApproveNext = async () => {
+    const sorted = Array.from(handRaiseQueue.entries()).sort((a, b) => a[1] - b[1]);
+    const next = sorted[0];
+    if (!next) return;
+    await handleAllowHandRaise(next[0]);
+    startSpeakingTimer(next[0]);
+  };
+
+  const handleClearQueue = async () => {
+    const all = Array.from(handRaiseQueue.keys());
+    if (all.length === 0) return;
+    // Dismiss all in parallel
+    const roomName = meetingRef.current?.roomName;
+    if (!roomName) return;
+    await Promise.all(all.map((id) => updateParticipantMetadata(roomName, id, {})));
+    showToast("Cleared", "All hand raises dismissed", "info", 2500);
+  };
+
+  const sendTimerMessage = (type: string, data: any = {}) => {
+    const room = roomRef.current;
+    if (!room) return;
+    const payload = new TextEncoder().encode(JSON.stringify({ type: "timer", ...data }));
+    room.localParticipant.publishData(payload, { reliable: true, topic: "timer" }).catch(() => {});
+  };
+
+  const startSpeakingTimer = (identity: string) => {
+    // Clear any existing timer
+    if (speakingTimerIntervalRef.current) clearInterval(speakingTimerIntervalRef.current);
+
+    setSpeakingTimer({ identity, remaining: timeLimit, limit: timeLimit });
+    sendTimerMessage("timer-start", { identity, duration: timeLimit * 1000 });
+
+    speakingTimerIntervalRef.current = setInterval(() => {
+      setSpeakingTimer((prev) => {
+        if (!prev || prev.remaining <= 1) {
+          // Time's up — auto-mute
+          if (prev) {
+            muteParticipant(meetingRef.current?.roomName || "", prev.identity).catch(() => {});
+            sendTimerMessage("timer-end");
+          }
+          if (speakingTimerIntervalRef.current) clearInterval(speakingTimerIntervalRef.current);
+          speakingTimerIntervalRef.current = null;
+          return null;
+        }
+        return { ...prev, remaining: prev.remaining - 1 };
+      });
+    }, 1000);
+  };
+
+  const handleExtendTimer = () => {
+    setSpeakingTimer((prev) => {
+      if (!prev) return null;
+      const additional = 60;
+      sendTimerMessage("timer-extend", { additional: additional * 1000 });
+      return { ...prev, remaining: prev.remaining + additional, limit: prev.limit + additional };
+    });
+  };
+
+  const handleCutOffTimer = async () => {
+    if (speakingTimerIntervalRef.current) {
+      clearInterval(speakingTimerIntervalRef.current);
+      speakingTimerIntervalRef.current = null;
+    }
+    const current = speakingTimer;
+    if (current) {
+      await muteParticipant(meetingRef.current?.roomName || "", current.identity).catch(() => {});
+      sendTimerMessage("timer-end");
+      setSpeakingTimer(null);
     }
   };
 
@@ -249,6 +427,145 @@ export default function AdminMeetingHostPage() {
       showToast("Error", e instanceof Error ? e.message : "Failed to mute all", "error", 3000);
     } finally {
       setMuteloading(new Set());
+    }
+  };
+
+  const [exporting, setExporting] = useState(false);
+
+  const handleExportPDF = async () => {
+    if (!meeting) return;
+    setExporting(true);
+    try {
+      const { jsPDF } = await import("jspdf");
+      await import("jspdf-autotable");
+      const doc = new jsPDF({ unit: "mm", format: "a4" });
+      const pageW = 190;
+      let y = 20;
+
+      // Helper
+      const addLine = (text: string, size = 11, style = "normal", indent = 0) => {
+        doc.setFontSize(size);
+        doc.setFont("helvetica", style);
+        doc.text(text, 10 + indent, y);
+        y += size * 0.45;
+      };
+
+      // Header
+      doc.setFontSize(22);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(232, 168, 56);
+      doc.text("Meeting Report", 10, y);
+      y += 10;
+      doc.setFontSize(14);
+      doc.setTextColor(255, 255, 255);
+      doc.text(meeting.title, 10, y);
+      y += 8;
+      doc.setFontSize(10);
+      doc.setTextColor(180, 180, 180);
+      doc.text(`Date: ${meeting.date}  |  ${meeting.startTime} - ${meeting.endTime}`, 10, y);
+      y += 6;
+      if (meeting.description) {
+        doc.text(`Description: ${meeting.description}`, 10, y);
+        y += 6;
+      }
+      y += 4;
+
+      // Participants
+      doc.setFontSize(12);
+      doc.setTextColor(232, 168, 56);
+      doc.setFont("helvetica", "bold");
+      doc.text(`Participants (${participants.length + 1})`, 10, y);
+      y += 7;
+      doc.setFontSize(9);
+      doc.setTextColor(200, 200, 200);
+      doc.setFont("helvetica", "normal");
+      doc.text(`Host: ${userDoc?.display_name || "Admin"}`, 10, y);
+      y += 5;
+      participants.forEach((p) => {
+        doc.text(`  ${p}`, 10, y);
+        y += 4.5;
+      });
+      y += 4;
+
+      // Attendance
+      let attendance: any[] = [];
+      try {
+        attendance = await getAttendance(meetingId);
+      } catch {}
+      if (attendance.length > 0) {
+        doc.setFontSize(12);
+        doc.setTextColor(232, 168, 56);
+        doc.setFont("helvetica", "bold");
+        doc.text("Attendance", 10, y);
+        y += 7;
+        (doc as any).autoTable({
+          startY: y,
+          margin: { left: 10 },
+          tableWidth: pageW,
+          styles: { fontSize: 9, textColor: [200, 200, 200], fillColor: [20, 20, 25] },
+          headStyles: { fillColor: [232, 168, 56], textColor: [10, 10, 15], fontStyle: "bold" },
+          alternateRowStyles: { fillColor: [25, 25, 30] },
+          columns: ["#", "Name", "Joined"],
+          body: attendance.map((a, i) => [
+            i + 1,
+            a.userName || a.userId,
+            a.joinedAt?.toDate?.()?.toLocaleString() || a.joinedAt || "-",
+          ]),
+        });
+        y = (doc as any).lastAutoTable.finalY + 8;
+      }
+
+      // Minutes
+      if (minutesContent.trim()) {
+        doc.setFontSize(12);
+        doc.setTextColor(232, 168, 56);
+        doc.setFont("helvetica", "bold");
+        doc.text("Minutes", 10, y);
+        y += 7;
+        const lines = doc.splitTextToSize(minutesContent, pageW);
+        doc.setFontSize(9);
+        doc.setTextColor(200, 200, 200);
+        doc.setFont("helvetica", "normal");
+        for (const line of lines) {
+          if (y > 270) { doc.addPage(); y = 20; }
+          doc.text(line, 10, y);
+          y += 5;
+        }
+        y += 4;
+      }
+
+      // Action Items
+      if (actionItems.length > 0) {
+        doc.setFontSize(12);
+        doc.setTextColor(232, 168, 56);
+        doc.setFont("helvetica", "bold");
+        doc.text("Action Items", 10, y);
+        y += 7;
+        (doc as any).autoTable({
+          startY: y,
+          margin: { left: 10 },
+          tableWidth: pageW,
+          styles: { fontSize: 9, textColor: [200, 200, 200], fillColor: [20, 20, 25] },
+          headStyles: { fillColor: [232, 168, 56], textColor: [10, 10, 15], fontStyle: "bold" },
+          alternateRowStyles: { fillColor: [25, 25, 30] },
+          columns: ["#", "Title", "Assignee", "Priority", "Status"],
+          body: actionItems.map((a, i) => [
+            i + 1,
+            a.title,
+            a.assigneeName || "-",
+            a.priority,
+            a.status,
+          ]),
+        });
+      }
+
+      doc.save(`meeting-${meeting.title.replace(/\s+/g, "-").toLowerCase()}.pdf`);
+      showToast("Exported", "PDF downloaded successfully", "success", 3000);
+    } catch (e) {
+      console.error("Export failed:", e);
+      showToast("Error", "Failed to generate PDF", "error", 3000);
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -654,8 +971,8 @@ export default function AdminMeetingHostPage() {
         }
 
         .participant-avatar {
-          width: 40px;
-          height: 40px;
+          width: 42px;
+          height: 42px;
           border-radius: 50%;
           background: linear-gradient(135deg, var(--gradient-blue), #2563EB);
           display: flex;
@@ -734,15 +1051,395 @@ export default function AdminMeetingHostPage() {
           flex-shrink: 0;
         }
 
-        .you-chip {
-          font-size: 10px;
+        .participant-actions {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          flex-shrink: 0;
+        }
+
+        .action-btn {
+          width: 34px;
+          height: 34px;
+          border-radius: 50%;
+          border: none;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 13px;
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+
+        .action-btn:active { transform: scale(0.9); }
+        .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .action-btn.mute {
+          background: rgba(255,107,107,0.15);
+          color: var(--error);
+        }
+
+        .action-btn.unmute {
+          background: rgba(74,222,128,0.15);
+          color: var(--success);
+        }
+
+        .action-btn.allow {
+          background: rgba(74,222,128,0.15);
+          color: var(--success);
+          box-shadow: 0 0 12px rgba(74,222,128,0.15);
+        }
+
+        .action-btn.dismiss {
+          background: rgba(255,255,255,0.06);
+          color: var(--text-tertiary);
+        }
+
+        .action-btn.dismiss:hover {
+          background: rgba(255,255,255,0.1);
+        }
+
+        .participant-card.hand-raised {
+          border-color: rgba(245,158,11,0.25);
+          background: rgba(245,158,11,0.03);
+          box-shadow: 0 0 20px rgba(245,158,11,0.05);
+        }
+
+        .participant-card.muted-by-admin {
+          border-color: rgba(255,165,0,0.15);
+          background: rgba(255,165,0,0.02);
+        }
+
+        /* ===== SPEAKING QUEUE ===== */
+        .queue-panel {
+          width: 100%;
+          max-width: 400px;
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: 16px;
+          overflow: hidden;
+          backdrop-filter: blur(10px);
+          animation: fadeIn 0.3s ease;
+        }
+
+        .queue-panel-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 10px 14px;
+          border-bottom: 1px solid var(--border);
+        }
+
+        .queue-panel-title {
+          font-size: 11px;
           font-weight: 700;
+          color: var(--text-tertiary);
+          text-transform: uppercase;
+          letter-spacing: 0.8px;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+
+        .queue-panel-title i {
+          font-size: 11px;
+          color: var(--primary);
+        }
+
+        .queue-panel-count {
+          font-size: 11px;
+          font-weight: 600;
           color: var(--primary);
           background: rgba(232,168,56,0.1);
           padding: 2px 8px;
           border-radius: 6px;
+        }
+
+        .queue-actions {
+          display: flex;
+          gap: 6px;
+          padding: 8px 10px;
+          border-bottom: 1px solid var(--border);
+        }
+
+        .queue-btn {
+          flex: 1;
+          padding: 7px 10px;
+          border-radius: 8px;
+          border: none;
+          font-size: 11px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 5px;
+        }
+
+        .queue-btn:active { transform: scale(0.96); }
+        .queue-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .queue-btn.approve-all {
+          background: rgba(74,222,128,0.12);
+          color: var(--success);
+        }
+
+        .queue-btn.clear {
+          background: rgba(255,255,255,0.04);
+          color: var(--text-tertiary);
+          border: 1px solid var(--border);
+        }
+
+        .queue-list {
+          display: flex;
+          flex-direction: column;
+          max-height: 200px;
+          overflow-y: auto;
+        }
+
+        .queue-list::-webkit-scrollbar { width: 4px; }
+        .queue-list::-webkit-scrollbar-track { background: transparent; }
+        .queue-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
+
+        .queue-item {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 8px 14px;
+          border-bottom: 1px solid var(--border);
+          transition: all 0.2s ease;
+        }
+
+        .queue-item:last-child { border-bottom: none; }
+        .queue-item-next {
+          background: rgba(74,222,128,0.03);
+        }
+
+        .queue-pos {
+          width: 22px;
+          height: 22px;
+          border-radius: 50%;
+          background: var(--surface);
+          border: 1px solid var(--border);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 10px;
+          font-weight: 700;
+          color: var(--text-tertiary);
+          flex-shrink: 0;
+        }
+
+        .queue-item-next .queue-pos {
+          border-color: rgba(74,222,128,0.3);
+          color: var(--success);
+          background: rgba(74,222,128,0.06);
+        }
+
+        .queue-avatar {
+          width: 28px;
+          height: 28px;
+          border-radius: 50%;
+          background: linear-gradient(135deg, #6B7280, #4B5563);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 11px;
+          font-weight: 700;
+          color: #fff;
+          flex-shrink: 0;
+        }
+
+        .queue-name {
+          flex: 1;
+          font-size: 13px;
+          font-weight: 600;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .queue-dismiss {
+          width: 26px;
+          height: 26px;
+          border-radius: 50%;
+          border: none;
+          background: transparent;
+          color: var(--text-tertiary);
+          font-size: 13px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.2s ease;
+          flex-shrink: 0;
+        }
+
+        .queue-dismiss:hover {
+          background: rgba(255,255,255,0.08);
+          color: var(--text-primary);
+        }
+
+        /* ===== SPEAKING TIMER ===== */
+        .timer-panel {
+          width: 100%;
+          max-width: 400px;
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: 16px;
+          overflow: hidden;
+          backdrop-filter: blur(10px);
+          animation: fadeIn 0.3s ease;
+        }
+
+        .timer-header {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 10px 14px;
+          border-bottom: 1px solid var(--border);
+        }
+
+        .timer-title {
+          font-size: 11px;
+          font-weight: 700;
+          color: var(--text-tertiary);
+          text-transform: uppercase;
+          letter-spacing: 0.8px;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+
+        .timer-title i {
+          font-size: 11px;
+          color: var(--success);
+        }
+
+        .timer-speaker {
+          margin-left: auto;
+          font-size: 13px;
+          font-weight: 700;
+          color: var(--text-primary);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .timer-body {
+          padding: 14px;
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          align-items: center;
+        }
+
+        .timer-progress-wrap {
+          width: 100%;
+          height: 6px;
+          background: rgba(255,255,255,0.06);
+          border-radius: 4px;
+          overflow: hidden;
+        }
+
+        .timer-progress-bar {
+          height: 100%;
+          border-radius: 4px;
+          transition: width 1s linear, background 0.5s ease;
+        }
+
+        .timer-digits {
+          font-size: 32px;
+          font-weight: 800;
+          font-variant-numeric: tabular-nums;
+          letter-spacing: 2px;
+          color: var(--text-primary);
+        }
+
+        .timer-actions {
+          display: flex;
+          gap: 8px;
+          padding: 8px 14px 12px;
+        }
+
+        .timer-btn {
+          flex: 1;
+          padding: 8px;
+          border-radius: 8px;
+          border: none;
+          font-size: 11px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 5px;
+        }
+
+        .timer-btn:active { transform: scale(0.96); }
+
+        .timer-btn.extend {
+          background: rgba(56,189,248,0.12);
+          color: var(--info);
+        }
+
+        .timer-btn.cutoff {
+          background: rgba(255,107,107,0.12);
+          color: var(--error);
+        }
+
+        .role-chip {
+          font-size: 9px;
+          font-weight: 700;
+          padding: 2px 8px;
+          border-radius: 6px;
           text-transform: uppercase;
           letter-spacing: 0.5px;
+          margin-left: 8px;
+        }
+
+        .host-chip {
+          color: var(--primary);
+          background: rgba(232,168,56,0.1);
+        }
+
+        .status-icon {
+          width: 32px;
+          height: 32px;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 12px;
+          flex-shrink: 0;
+        }
+
+        .status-icon.muted {
+          background: rgba(255,255,255,0.06);
+          color: var(--text-tertiary);
+        }
+
+        .participant-avatar.hand-raised-ring {
+          box-shadow: 0 0 0 2px #F59E0B, 0 0 20px rgba(245,158,11,0.2);
+        }
+
+        .avatar-badge {
+          position: absolute;
+          bottom: -2px;
+          right: -2px;
+          width: 18px;
+          height: 18px;
+          border-radius: 50%;
+          background: #F59E0B;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 9px;
+          color: #fff;
+          box-shadow: 0 2px 8px rgba(245,158,11,0.4);
+          border: 2px solid var(--bg);
         }
 
         /* EMPTY STATE */
@@ -780,9 +1477,9 @@ export default function AdminMeetingHostPage() {
         .bottom-controls {
           display: flex;
           align-items: center;
-          justify-content: center;
+          justify-content: space-between;
           gap: 16px;
-          padding: 20px;
+          padding: 16px 24px;
           flex-shrink: 0;
           background: rgba(10,10,15,0.8);
           backdrop-filter: blur(20px);
@@ -1054,7 +1751,7 @@ export default function AdminMeetingHostPage() {
         @media (max-width: 480px) {
           .top-bar { padding: 12px 16px; }
           .main-area { padding: 16px; }
-          .bottom-controls { padding: 16px; gap: 12px; }
+          .bottom-controls { padding: 12px 16px; gap: 8px; }
           .meeting-greeting h1 { font-size: 20px; }
         }
       `}</style>
@@ -1164,6 +1861,23 @@ export default function AdminMeetingHostPage() {
                   </span>
                 )}
               </button>
+              <button
+                onClick={handleExportPDF}
+                disabled={exporting}
+                style={{
+                  width: 36, height: 36, borderRadius: "50%", border: "1px solid var(--border)",
+                  background: "var(--surface)", color: "var(--text-secondary)", fontSize: 13,
+                  cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+                  transition: "all 0.2s ease",
+                }}
+                title="Export PDF"
+              >
+                {exporting ? (
+                  <i className="fas fa-spinner fa-spin"></i>
+                ) : (
+                  <i className="fas fa-download"></i>
+                )}
+              </button>
               <button className="top-end-btn" onClick={endCall}>
                 <i className="fas fa-phone-slash"></i> End
               </button>
@@ -1176,6 +1890,80 @@ export default function AdminMeetingHostPage() {
               <h1>{meeting.title}</h1>
               <p>{meeting.description || "Broadcasting live to members"}</p>
             </div>
+
+            {/* SPEAKING QUEUE */}
+            {handRaiseQueue.size > 0 && (
+              <div className="queue-panel">
+                <div className="queue-panel-header">
+                  <span className="queue-panel-title">
+                    <i className="fas fa-hand"></i> Speaking Queue
+                  </span>
+                  <span className="queue-panel-count">{handRaiseQueue.size}</span>
+                </div>
+                <div className="queue-actions">
+                  <button className="queue-btn approve-all" onClick={handleApproveNext}
+                    disabled={muteloading.size > 0}>
+                    {muteloading.size > 0 ? (
+                      <i className="fas fa-spinner fa-spin"></i>
+                    ) : (
+                      <><i className="fas fa-check"></i> Approve Next</>
+                    )}
+                  </button>
+                  <button className="queue-btn clear" onClick={handleClearQueue}>
+                    <i className="fas fa-xmark"></i> Clear All
+                  </button>
+                </div>
+                <div className="queue-list">
+                  {Array.from(handRaiseQueue.entries())
+                    .sort((a, b) => a[1] - b[1])
+                    .map(([identity, ts], idx) => (
+                      <div key={identity} className={`queue-item ${idx === 0 ? "queue-item-next" : ""}`}>
+                        <div className="queue-pos">{idx + 1}</div>
+                        <div className="queue-avatar">{identity.charAt(0).toUpperCase()}</div>
+                        <div className="queue-name">{identity}</div>
+                        <button className="queue-dismiss" onClick={() => handleDismissHandRaise(identity)}
+                          title="Remove from queue">
+                          <i className="fas fa-xmark"></i>
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {/* SPEAKING TIMER */}
+            {speakingTimer && (
+              <div className="timer-panel">
+                <div className="timer-header">
+                  <span className="timer-title"><i className="fas fa-hourglass-half"></i> Speaking</span>
+                  <span className="timer-speaker">{speakingTimer.identity}</span>
+                </div>
+                <div className="timer-body">
+                  <div className="timer-progress-wrap">
+                    <div className="timer-progress-bar" style={{
+                      width: `${(speakingTimer.remaining / speakingTimer.limit) * 100}%`,
+                      background: speakingTimer.remaining <= 30
+                        ? "linear-gradient(90deg, #FF6B6B, #EE4444)"
+                        : speakingTimer.remaining <= 60
+                          ? "linear-gradient(90deg, #F59E0B, #D97706)"
+                          : "linear-gradient(90deg, var(--gradient-start), var(--gradient-end))",
+                    }}></div>
+                  </div>
+                  <div className="timer-digits">
+                    {String(Math.floor(speakingTimer.remaining / 60)).padStart(2, "0")}:
+                    {String(speakingTimer.remaining % 60).padStart(2, "0")}
+                  </div>
+                </div>
+                <div className="timer-actions">
+                  <button className="timer-btn extend" onClick={handleExtendTimer}>
+                    <i className="fas fa-plus"></i> +60s
+                  </button>
+                  <button className="timer-btn cutoff" onClick={handleCutOffTimer}>
+                    <i className="fas fa-stop"></i> Cut Off
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* AGENDA PANEL */}
             {showAgenda && agendaItems.length > 0 && (
@@ -1373,6 +2161,18 @@ export default function AdminMeetingHostPage() {
               <div className="participants-header">
                 <span className="participants-title">In the room</span>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {handRaiseQueue.size > 0 && (
+                    <button onClick={handleClearQueue}
+                      style={{
+                        padding: "4px 10px", borderRadius: 6, border: "none",
+                        background: "rgba(232,168,56,0.12)", color: "var(--primary)",
+                        fontSize: 11, fontWeight: 600, cursor: "pointer",
+                        display: "flex", alignItems: "center", gap: 4,
+                      }}>
+                      <i className="fas fa-hand" style={{ fontSize: 10 }}></i>
+                      Lower All ({handRaiseQueue.size})
+                    </button>
+                  )}
                   {audioParticipants.size > 0 && (
                     <button onClick={handleMuteAll} disabled={muteloading.size > 0}
                       style={{
@@ -1398,26 +2198,29 @@ export default function AdminMeetingHostPage() {
 
               <div className="participants-grid">
                 {/* Host (admin) */}
-                <div className={`participant-card ${micEnabled ? "speaking" : ""}`}>
-                  <div className={`participant-avatar ${micEnabled ? "speaking-ring" : ""}`}>
+                <div className={`participant-card host-card ${micEnabled ? "speaking" : ""}`}>
+                  <div className={`participant-avatar ${micEnabled ? "speaking-ring" : ""}`}
+                    style={{ background: "linear-gradient(135deg, var(--gradient-start), var(--gradient-end))" }}>
                     {identity.charAt(0).toUpperCase()}
                   </div>
                   <div className="participant-info">
                     <div className="participant-name">
                       {userDoc?.display_name || "Admin"}
-                      <span className="you-chip" style={{ marginLeft: 8 }}>Host</span>
+                      <span className="role-chip host-chip">Host</span>
                     </div>
                     <div className="participant-role">{micEnabled ? "Speaking" : "Mic off"}</div>
                   </div>
-                  {micEnabled ? (
-                    <div className="speaking-wave">
-                      <span></span><span></span><span></span><span></span>
-                    </div>
-                  ) : (
-                    <div className="muted-icon" title="Click microphone button to speak">
-                      <i className="fas fa-microphone-slash"></i>
-                    </div>
-                  )}
+                  <div className="participant-actions">
+                    {micEnabled ? (
+                      <div className="speaking-wave">
+                        <span></span><span></span><span></span><span></span>
+                      </div>
+                    ) : (
+                      <div className="status-icon muted" title="Click mic button to speak">
+                        <i className="fas fa-microphone-slash"></i>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Remote participants */}
@@ -1428,48 +2231,66 @@ export default function AdminMeetingHostPage() {
                     <p>Share this meeting so others can join and listen.</p>
                   </div>
                 ) : (
-                  participants.map((p) => (
-                    <div key={p} className={`participant-card ${speakingParticipants.has(p) ? "speaking" : ""}`}>
-                      <div className={`participant-avatar ${speakingParticipants.has(p) ? "speaking-ring" : ""}`}>
-                        {p.charAt(0).toUpperCase()}
-                      </div>
-                      <div className="participant-info">
-                        <div className="participant-name">{p}</div>
-                        <div className="participant-role">
-                          {speakingParticipants.has(p) ? "Speaking" : audioParticipants.has(p) ? "Unmuted" : "Listen-only"}
+                  participants.map((p) => {
+                    const isHandRaised = handRaisedParticipants.has(p);
+                    const isSpeaking = speakingParticipants.has(p);
+                    const hasAudio = audioParticipants.has(p);
+                    const isMutedAdmin = mutedParticipants.has(p);
+                    const isLoading = muteloading.has(p);
+
+                    let avatarBg = "linear-gradient(135deg, #6B7280, #4B5563)";
+                    let statusText = "Listen-only";
+                    if (isHandRaised) { avatarBg = "linear-gradient(135deg, #F59E0B, #D97706)"; statusText = "Wants to speak"; }
+                    if (isSpeaking) { avatarBg = "linear-gradient(135deg, #4ADE80, #22C55E)"; statusText = "Speaking"; }
+                    if (!isSpeaking && hasAudio && !isHandRaised) { statusText = "Unmuted"; }
+                    if (isMutedAdmin && !isHandRaised) { statusText = "Muted by host"; }
+
+                    return (
+                      <div key={p} className={`participant-card ${isSpeaking ? "speaking" : ""} ${isHandRaised ? "hand-raised" : ""} ${isMutedAdmin ? "muted-by-admin" : ""}`}>
+                        <div className={`participant-avatar ${isSpeaking ? "speaking-ring" : ""} ${isHandRaised ? "hand-raised-ring" : ""}`}
+                          style={{ background: avatarBg }}>
+                          {p.charAt(0).toUpperCase()}
+                          {isHandRaised && !isSpeaking && (
+                            <div className="avatar-badge">
+                              <i className="fas fa-hand"></i>
+                            </div>
+                          )}
+                        </div>
+                        <div className="participant-info">
+                          <div className="participant-name">{p}</div>
+                          <div className="participant-role">{statusText}</div>
+                        </div>
+                        <div className="participant-actions">
+                          {isSpeaking ? (
+                            <div className="speaking-wave">
+                              <span></span><span></span><span></span><span></span>
+                            </div>
+                          ) : isHandRaised ? (
+                            <>
+                              <button className="action-btn allow" onClick={() => handleAllowHandRaise(p)} disabled={isLoading} title="Allow to speak">
+                                {isLoading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-check"></i>}
+                              </button>
+                              <button className="action-btn dismiss" onClick={() => handleDismissHandRaise(p)} title="Dismiss">
+                                <i className="fas fa-xmark"></i>
+                              </button>
+                            </>
+                          ) : hasAudio ? (
+                            <button className="action-btn mute" onClick={() => handleMuteParticipant(p)} disabled={isLoading} title="Close microphone">
+                              {isLoading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-microphone"></i>}
+                            </button>
+                          ) : isMutedAdmin ? (
+                            <button className="action-btn unmute" onClick={() => handleUnmuteParticipant(p)} disabled={isLoading} title="Restore microphone">
+                              {isLoading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-microphone-slash"></i>}
+                            </button>
+                          ) : (
+                            <div className="status-icon muted" title="No audio">
+                              <i className="fas fa-microphone-slash"></i>
+                            </div>
+                          )}
                         </div>
                       </div>
-                      <div className="participant-status">
-                        {speakingParticipants.has(p) ? (
-                          <div className="speaking-wave">
-                            <span></span><span></span><span></span><span></span>
-                          </div>
-                        ) : audioParticipants.has(p) ? (
-                          <button
-                            onClick={() => handleMuteParticipant(p)}
-                            disabled={muteloading.has(p)}
-                            style={{
-                              width: 32, height: 32, borderRadius: "50%", border: "none",
-                              background: "rgba(255,107,107,0.15)", color: "#FF6B6B",
-                              fontSize: 12, cursor: "pointer", display: "flex",
-                              alignItems: "center", justifyContent: "center",
-                            }}
-                            title="Close microphone"
-                          >
-                            {muteloading.has(p) ? (
-                              <i className="fas fa-spinner fa-spin"></i>
-                            ) : (
-                              <i className="fas fa-microphone"></i>
-                            )}
-                          </button>
-                        ) : (
-                          <div className="muted-icon" title="Muted">
-                            <i className="fas fa-microphone-slash"></i>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -1487,7 +2308,8 @@ export default function AdminMeetingHostPage() {
                 <span>{formatElapsed(elapsed)}</span>
               </div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <ReactionsOverlay room={roomRef.current} identity={identity} />
               <button
                 className={`ctrl-btn ${micEnabled ? "mic-on" : "mic-off"}`}
                 onClick={toggleMic}

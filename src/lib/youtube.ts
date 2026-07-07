@@ -6,8 +6,7 @@
 import { db } from "./firebase";
 import {
   doc, getDoc, setDoc, collection, getDocs, query, orderBy, limit,
-  writeBatch, serverTimestamp, deleteDoc, startAfter,
-  collectionGroup,
+  writeBatch, serverTimestamp, deleteDoc, startAfter, where,
 } from "firebase/firestore";
 
 /* ─── Types ───────────────────────────────────────────────────── */
@@ -101,24 +100,37 @@ export async function getVideosPage(
 }
 
 /**
+ * Fetch a single video by ID.
+ */
+export async function getVideo(id: string): Promise<YouTubeVideo | null> {
+  const snap = await getDoc(doc(db, VIDEOS_COL, id));
+  if (!snap.exists()) return null;
+  return snap.data() as YouTubeVideo;
+}
+
+/**
  * Fetch specific videos by their IDs (for user's playlist).
- * Does individual doc reads — intended for small sets (user's playlist).
+ * Uses `in` queries (up to 30 per query) for efficient batch reads.
  */
 export async function getVideosByIds(ids: string[]): Promise<YouTubeVideo[]> {
   if (ids.length === 0) return [];
-  const results: YouTubeVideo[] = [];
-  // Process in small batches to avoid too many concurrent reads
-  const batchSize = 10;
+  const docMap = new Map<string, YouTubeVideo>();
+  // Use `in` queries — Firestore supports up to 30 values per `in` query
+  const batchSize = 30;
   for (let i = 0; i < ids.length; i += batchSize) {
     const batch = ids.slice(i, i + batchSize);
-    const docs = await Promise.all(
-      batch.map((id) => getDoc(doc(db, VIDEOS_COL, id)))
+    const q = query(
+      collection(db, VIDEOS_COL),
+      where("__name__", "in", batch)
     );
-    for (const d of docs) {
-      if (d.exists()) results.push(d.data() as YouTubeVideo);
+    const snap = await getDocs(q);
+    for (const d of snap.docs) {
+      const video = d.data() as YouTubeVideo;
+      docMap.set(d.id, video);
     }
   }
-  return results;
+  // Preserve original order
+  return ids.map((id) => docMap.get(id)).filter((v): v is YouTubeVideo => !!v);
 }
 
 export async function saveVideos(videos: YouTubeVideo[]): Promise<void> {
@@ -505,7 +517,11 @@ export async function getUserNote(
   const ref = doc(db, "users", uid, "tv_notes", videoId);
   const snap = await getDoc(ref);
   if (!snap.exists()) return null;
-  return snap.data() as TvNote;
+  const data = snap.data();
+  return {
+    ...data,
+    updatedAt: (data.updatedAt as any)?.toDate?.() || data.updatedAt || null,
+  } as TvNote;
 }
 
 /**
@@ -517,7 +533,13 @@ export async function getAllUserNotes(
   const col = collection(db, "users", uid, "tv_notes");
   const q = query(col, orderBy("updatedAt", "desc"), limit(200));
   const snap = await getDocs(q);
-  return snap.docs.map((d) => d.data() as TvNote);
+  return snap.docs.map((d) => {
+    const data = d.data();
+    return {
+      ...data,
+      updatedAt: (data.updatedAt as any)?.toDate?.() || data.updatedAt || null,
+    } as TvNote;
+  });
 }
 
 /**

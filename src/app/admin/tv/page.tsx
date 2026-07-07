@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useFullscreenToggle } from "@/lib/tv/fullscreen";
 import {
-  getChannel, getVideos, saveChannel, saveVideos, clearAllVideos,
+  getChannel, getVideos, getVideosPage, saveChannel, saveVideos, clearAllVideos,
   getPlaylists, addPlaylist, deletePlaylist,
   generateBroadcast, getTodayBroadcast,
   getGivingConfig, saveGivingConfig,
@@ -48,8 +48,14 @@ export default function AdminTVPage() {
 
   // ─── All synced videos (for playlist builder) ───
   const [allVideos, setAllVideos] = useState<YouTubeVideo[]>([]);
-  const [allVideosLoading, setAllVideosLoading] = useState(false);
   const [videoSearch, setVideoSearch] = useState("");
+
+  // ─── Paginated video grid (channel tab, lazy loaded) ───
+  const [paginatedVideos, setPaginatedVideos] = useState<YouTubeVideo[]>([]);
+  const [paginatedLastPos, setPaginatedLastPos] = useState<number | null>(null);
+  const [paginatedHasMore, setPaginatedHasMore] = useState(false);
+  const [paginatedLoading, setPaginatedLoading] = useState(false);
+  const paginatedLoadedRef = useRef(false);
 
   // ─── Playlist state ───
   const [playlists, setPlaylists] = useState<TVPlaylist[]>([]);
@@ -105,7 +111,7 @@ export default function AdminTVPage() {
     let mounted = true;
     const load = async () => {
       try {
-        const [c, videos] = await Promise.all([getChannel(), getVideos({ includeHidden: true })]);
+        const [c, videos] = await Promise.all([getChannel(), getVideos({ max: 50, includeHidden: true })]);
         if (!mounted) return;
         setChannel(c);
         setVideoCount(videos.length);
@@ -142,21 +148,7 @@ export default function AdminTVPage() {
     return () => { mounted = false; };
   }, []);
 
-  // Load all videos for the browse section
-  useEffect(() => {
-    let mounted = true;
-    const loadAll = async () => {
-      setAllVideosLoading(true);
-      try {
-        const v = await getVideos({ max: 200 });
-        if (mounted) setAllVideos(v);
-      } catch {} finally {
-        if (mounted) setAllVideosLoading(false);
-      }
-    };
-    loadAll();
-    return () => { mounted = false; };
-  }, []);
+
 
   // Load playlists
   useEffect(() => {
@@ -172,6 +164,34 @@ export default function AdminTVPage() {
     loadPl();
     return () => { mounted = false; };
   }, []);
+
+  // ─── Paginated video grid — load first page on mount ───
+  useEffect(() => {
+    if (paginatedLoadedRef.current) return;
+    paginatedLoadedRef.current = true;
+    (async () => {
+      setPaginatedLoading(true);
+      try {
+        const { videos: page, lastPosition } = await getVideosPage(12, undefined, true);
+        setPaginatedVideos(page);
+        setPaginatedLastPos(lastPosition);
+        setPaginatedHasMore(page.length === 12);
+      } catch {}
+      setPaginatedLoading(false);
+    })();
+  }, []);
+
+  const handleLoadMoreVideos = useCallback(async () => {
+    if (paginatedLoading || !paginatedHasMore) return;
+    setPaginatedLoading(true);
+    try {
+      const { videos: page, lastPosition } = await getVideosPage(12, paginatedLastPos ?? undefined, true);
+      setPaginatedVideos((prev) => [...prev, ...page]);
+      setPaginatedLastPos(lastPosition);
+      setPaginatedHasMore(page.length === 12);
+    } catch {}
+    setPaginatedLoading(false);
+  }, [paginatedLastPos, paginatedLoading, paginatedHasMore]);
 
   // Add video to playlist
   const addVideoToPlaylist = useCallback((videoId: string) => {
@@ -870,6 +890,83 @@ export default function AdminTVPage() {
           </div>
         </div>
       )}
+
+      {/* ─── SYNCED VIDEOS GRID (paginated, lazy-loaded) ─── */}
+      {channel && (
+        <section>
+          <div className="section-title" style={{ marginTop: 8, marginBottom: 12 }}>
+            <i className="fas fa-video"></i>
+            Synced Videos
+            {paginatedVideos.length > 0 && (
+              <span style={{ fontSize: 11, color: "var(--text-tertiary)", fontWeight: 500, marginLeft: 4 }}>
+                ({paginatedVideos.length} loaded)
+              </span>
+            )}
+          </div>
+
+          {paginatedVideos.length === 0 && paginatedLoading ? (
+            <div className="tv-grid-skeleton">
+              {[1,2,3,4].map((i) => (
+                <div key={i} className="tv-grid-skeleton-card">
+                  <div className="tv-grid-skeleton-thumb"></div>
+                  <div className="tv-grid-skeleton-title"></div>
+                  <div className="tv-grid-skeleton-meta"></div>
+                </div>
+              ))}
+            </div>
+          ) : paginatedVideos.length === 0 ? (
+            <div className="tv-grid-empty">
+              <i className="fas fa-video-slash"></i>
+              <span>No videos synced yet. Connect a channel and sync.</span>
+            </div>
+          ) : (
+            <>
+              <div className="tv-grid">
+                {paginatedVideos.map((v) => (
+                  <div key={v.id} className="tv-grid-card">
+                    <div className="tv-grid-card-thumb">
+                      <img
+                        src={v.thumbnail || `https://i.ytimg.com/vi/${v.id}/default.jpg`}
+                        alt={v.title}
+                        loading="lazy"
+                      />
+                      <div className="tv-grid-card-duration">
+                        {v.duration > 0
+                          ? `${Math.floor(v.duration / 60)}:${String(v.duration % 60).padStart(2, "0")}`
+                          : ""}
+                      </div>
+                      {v.isFeatured && <div className="tv-grid-card-badge featured"><i className="fas fa-star"></i></div>}
+                      {v.isHidden && <div className="tv-grid-card-badge hidden"><i className="fas fa-eye-slash"></i></div>}
+                    </div>
+                    <div className="tv-grid-card-info">
+                      <div className="tv-grid-card-title">{v.title}</div>
+                      <div className="tv-grid-card-meta">{v.channelTitle}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {paginatedHasMore && (
+                <button
+                  className="tv-grid-load-more"
+                  onClick={handleLoadMoreVideos}
+                  disabled={paginatedLoading}
+                >
+                  {paginatedLoading ? (
+                    <><i className="fas fa-spinner fa-spin"></i> Loading...</>
+                  ) : (
+                    <><i className="fas fa-chevron-down"></i> Load More</>
+                  )}
+                </button>
+              )}
+              {paginatedLoading && paginatedVideos.length > 0 && (
+                <div style={{ textAlign: "center", padding: 12, color: "var(--text-tertiary)", fontSize: 12 }}>
+                  <i className="fas fa-spinner fa-spin"></i> Loading more...
+                </div>
+              )}
+            </>
+          )}
+        </section>
+      )}
     </>
   );
 
@@ -993,10 +1090,7 @@ export default function AdminTVPage() {
               <input className="form-input" type="text" placeholder="Search videos..." value={videoSearch} onChange={(e) => setVideoSearch(e.target.value)} style={{ paddingLeft: 36 }} />
             </div>
           </div>
-          {allVideosLoading ? (
-            <div className="loading-state"><span className="spinner"></span></div>
-          ) : (
-            <div className="pl-browse-grid">
+          <div className="pl-browse-grid">
               {filteredVideos.length === 0 ? (
                 <div style={{ padding: 16, textAlign: "center", fontSize: 12, color: "var(--text-tertiary)" }}>No videos found</div>
               ) : (
@@ -1015,7 +1109,6 @@ export default function AdminTVPage() {
                 })
               )}
             </div>
-          )}
           <button className="btn-primary" onClick={handleAddPlaylist} disabled={plSaving || !plName.trim() || plVideoIds.length === 0}>
             {plSaving ? <><span className="spinner"></span> Saving...</> : <><i className="fas fa-save"></i> Save Playlist</>}
           </button>
@@ -1548,6 +1641,195 @@ export default function AdminTVPage() {
         .loading-state i { font-size: 32px; opacity: 0.3; }
         .spinner { width: 24px; height: 24px; border: 3px solid rgba(255,255,255,0.05); border-top-color: var(--primary); border-radius: 50%; animation: spin 0.8s linear infinite; display: inline-block; }
         @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes tvGridShimmer {
+          0% { background-position: -200px 0; }
+          100% { background-position: 200px 0; }
+        }
+
+        /* ─── Synced Videos Grid (premium card grid) ─── */
+        .tv-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 12px;
+        }
+        .tv-grid-card {
+          background: var(--surface-card);
+          border: 1px solid var(--border);
+          border-radius: var(--radius-md);
+          overflow: hidden;
+          transition: all 0.2s ease;
+        }
+        .tv-grid-card:active { transform: scale(0.97); background: var(--surface-elevated); }
+        .tv-grid-card-thumb {
+          position: relative;
+          aspect-ratio: 16 / 9;
+          background: var(--surface-elevated);
+          overflow: hidden;
+        }
+        .tv-grid-card-thumb img {
+          width: 100%; height: 100%; object-fit: cover;
+        }
+        .tv-grid-card-duration {
+          position: absolute; bottom: 6px; right: 6px;
+          padding: 2px 6px; border-radius: 4px;
+          background: rgba(0,0,0,0.8); color: #fff;
+          font-size: 10px; font-weight: 700;
+          letter-spacing: 0.3px;
+        }
+        .tv-grid-card-badge {
+          position: absolute; top: 6px; left: 6px;
+          width: 24px; height: 24px; border-radius: 50%;
+          display: flex; align-items: center; justify-content: center;
+          font-size: 10px; backdrop-filter: blur(4px);
+        }
+        .tv-grid-card-badge.featured {
+          background: rgba(232,168,56,0.85); color: #fff;
+        }
+        .tv-grid-card-badge.hidden {
+          background: rgba(107,107,107,0.85); color: #fff;
+        }
+        .tv-grid-card-info {
+          padding: 8px 10px 10px;
+        }
+        .tv-grid-card-title {
+          font-size: 12px; font-weight: 600;
+          display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+          overflow: hidden; line-height: 1.4;
+        }
+        .tv-grid-card-meta {
+          font-size: 10px; color: var(--text-tertiary);
+          margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+
+        /* ─── Skeleton shimmer for video grid ─── */
+        .tv-grid-skeleton {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 12px;
+        }
+        .tv-grid-skeleton-card {
+          background: var(--surface-card);
+          border: 1px solid var(--border);
+          border-radius: var(--radius-md);
+          overflow: hidden;
+        }
+        .tv-grid-skeleton-thumb {
+          aspect-ratio: 16 / 9;
+          background: linear-gradient(90deg, var(--surface-elevated) 25%, var(--surface-hover) 50%, var(--surface-elevated) 75%);
+          background-size: 400px 100%;
+          animation: tvGridShimmer 1.4s ease-in-out infinite;
+        }
+        .tv-grid-skeleton-title {
+          height: 12px; margin: 10px 10px 6px; border-radius: 6px;
+          background: linear-gradient(90deg, var(--surface-elevated) 25%, var(--surface-hover) 50%, var(--surface-elevated) 75%);
+          background-size: 400px 100%;
+          animation: tvGridShimmer 1.4s ease-in-out infinite;
+        }
+        .tv-grid-skeleton-meta {
+          height: 10px; width: 60%; margin: 0 10px 12px; border-radius: 6px;
+          background: linear-gradient(90deg, var(--surface-elevated) 25%, var(--surface-hover) 50%, var(--surface-elevated) 75%);
+          background-size: 400px 100%;
+          animation: tvGridShimmer 1.4s ease-in-out infinite;
+        }
+
+        .tv-grid-empty {
+          padding: 24px; text-align: center; color: var(--text-tertiary);
+          display: flex; flex-direction: column; align-items: center; gap: 8px;
+          background: var(--surface-card); border: 1px dashed var(--border);
+          border-radius: var(--radius-lg);
+        }
+        .tv-grid-empty i { font-size: 28px; opacity: 0.3; }
+
+        .tv-grid-load-more {
+          width: 100%; margin-top: 12px; padding: 14px;
+          border-radius: var(--radius-md); font-size: 14px; font-weight: 600;
+          border: 1.5px solid var(--border); cursor: pointer; transition: all 0.2s ease;
+          background: var(--surface); color: var(--text-secondary);
+          display: flex; align-items: center; justify-content: center; gap: 8px;
+        }
+        .tv-grid-load-more:active { background: var(--surface-elevated); transform: scale(0.97); }
+        .tv-grid-load-more:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* ─── Premium TV Loading Screen ─── */
+        .tv-loading-screen {
+          position: fixed; inset: 0; z-index: 99999;
+          display: flex; flex-direction: column;
+          align-items: center; justify-content: center;
+          background: #000;
+        }
+        .tv-loading-ring {
+          width: 72px; height: 72px; border-radius: 50%;
+          border: 3px solid rgba(232,168,56,0.08);
+          border-top-color: #E8A838; border-right-color: #D4762A;
+          animation: tvLoadingSpin 0.9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+          display: flex; align-items: center; justify-content: center;
+          position: relative;
+        }
+        .tv-loading-ring-inner {
+          width: 48px; height: 48px; border-radius: 50%;
+          border: 2px solid rgba(232,168,56,0.06);
+          border-bottom-color: #E8A838; border-left-color: #D4762A;
+          animation: tvLoadingSpin 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite reverse;
+        }
+        .tv-loading-icon {
+          position: absolute; font-size: 20px; color: #E8A838;
+          animation: tvLoadingPulse 1.6s ease-in-out infinite;
+        }
+        .tv-loading-brand {
+          margin-top: 24px; font-size: 15px; font-weight: 800;
+          letter-spacing: -0.3px; color: #E8A838;
+          animation: tvLoadingFade 1.6s ease-in-out infinite;
+        }
+        .tv-loading-dots {
+          margin-top: 10px; display: flex; gap: 6px;
+        }
+        .tv-loading-dot {
+          width: 6px; height: 6px; border-radius: 50%;
+          background: #E8A838;
+          animation: tvLoadingBounce 1.2s ease-in-out infinite;
+        }
+        .tv-loading-dot:nth-child(2) { animation-delay: 0.2s; }
+        .tv-loading-dot:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes tvLoadingSpin { to { transform: rotate(360deg); } }
+        @keyframes tvLoadingPulse {
+          0%, 100% { opacity: 0.4; transform: scale(0.9); }
+          50% { opacity: 1; transform: scale(1.1); }
+        }
+        @keyframes tvLoadingFade {
+          0%, 100% { opacity: 0.5; }
+          50% { opacity: 1; }
+        }
+        @keyframes tvLoadingBounce {
+          0%, 100% { transform: translateY(0); opacity: 0.3; }
+          50% { transform: translateY(-6px); opacity: 1; }
+        }
+
+        /* ─── Skeleton shimmer for browse section ─── */
+        @keyframes adminShimmer {
+          0% { background-position: -200px 0; }
+          100% { background-position: 200px 0; }
+        }
+        .pl-skeleton-list { display: flex; flex-direction: column; gap: 6px; }
+        .pl-skeleton-item {
+          display: flex; align-items: center; gap: 10px;
+          padding: 8px 10px;
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: var(--radius-sm);
+          height: 46px;
+        }
+        .pl-skeleton-thumb {
+          width: 50px; height: 30px; border-radius: 4px; flex-shrink: 0;
+          background: linear-gradient(90deg, var(--surface-elevated) 25%, var(--surface-hover) 50%, var(--surface-elevated) 75%);
+          background-size: 400px 100%;
+          animation: adminShimmer 1.4s ease-in-out infinite;
+        }
+        .pl-skeleton-line {
+          flex: 1; height: 12px; border-radius: 6px;
+          background: linear-gradient(90deg, var(--surface-elevated) 25%, var(--surface-hover) 50%, var(--surface-elevated) 75%);
+          background-size: 400px 100%;
+          animation: adminShimmer 1.4s ease-in-out infinite;
+        }
 
         /* ─── Playlist Builder ─── */
         .pl-builder {
@@ -2157,32 +2439,12 @@ export default function AdminTVPage() {
                     </div>
                   </div>
 
-                  {currentVideo ? (
-                    <div ref={tvPlayerTargetRef} className="tv-player-container">
-                      <div className="tv-overlay">
-                        <div className="tv-overlay-info">
-                          <div className="tv-overlay-now">
-                            <i className="fas fa-tv"></i>
-                            Now Playing
-                          </div>
-                          <div className="tv-overlay-title">{currentVideo.title}</div>
-                        </div>
-                        <button className="tv-expand-btn" onClick={toggleFullscreen} title="Full screen">
-                          <i className="fas fa-expand"></i>
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="tv-no-video">
-                      <i className="fas fa-video-slash"></i>
-                      <span>TV is off air</span>
-                    </div>
-                  )}
+
 
                   <div className="tv-channel-strip">
                     <div className="tv-channel-avatar">
                       {channel.thumbnail ? (
-                        <img src={channel.thumbnail} alt={channel.title} />
+                        <img src={channel.thumbnail.replace(/^http:/, 'https:')} alt={channel.title} referrerPolicy="no-referrer" crossOrigin="anonymous" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
                       ) : (
                         <i className="fab fa-youtube"></i>
                       )}
@@ -2200,9 +2462,17 @@ export default function AdminTVPage() {
             )}
 
             {loading ? (
-              <div className="loading-state">
-                <i className="fas fa-tv"></i>
-                <span>Loading TV settings...</span>
+              <div className="tv-loading-screen">
+                <div className="tv-loading-ring">
+                  <div className="tv-loading-ring-inner"></div>
+                  <i className="fas fa-tv tv-loading-icon"></i>
+                </div>
+                <div className="tv-loading-brand">Church TV</div>
+                <div className="tv-loading-dots">
+                  <div className="tv-loading-dot"></div>
+                  <div className="tv-loading-dot"></div>
+                  <div className="tv-loading-dot"></div>
+                </div>
               </div>
             ) : (
               <div className="section">

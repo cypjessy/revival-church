@@ -36,6 +36,8 @@
     "capacitor-music-controls-plugin": "^6.1.0",
     "capacitor-native-biometric": "^4.2.2",
     "firebase": "^12.15.0",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
     "livekit-client": "^2.20.0",
     "livekit-server-sdk": "^2.15.5",
     "maverick.js": "^0.37.0",

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import "plyr/dist/plyr.css";
 import { useTvPlayer } from "@/lib/tv/TvPlayerProvider";
 import {
-  getVideos, getVideosPage, getVideosByIds,
+  getVideos, getVideosPage, getVideosByIds, getVideo,
   getChannel,
   getUserTvState, updateUserTvProgress, saveUserTvState,
   addToUserPlaylist, removeFromUserPlaylist,
@@ -148,6 +148,50 @@ export default function TVPage() {
   // ─── Preview mode toggle ───
   const [notesPreview, setNotesPreview] = useState(false);
 
+  // ─── Notes sub-tabs & reader ───
+  const [notesSubTab, setNotesSubTab] = useState<"write" | "saved">("write");
+  const [selectedNote, setSelectedNote] = useState<TvNote | null>(null);
+  const [noteSavingExplicit, setNoteSavingExplicit] = useState(false);
+  const [notesSearch, setNotesSearch] = useState("");
+
+  /* ─── Export all notes as a downloadable markdown file ─── */
+  const handleExportNotes = useCallback(() => {
+    if (allNotes.length === 0) return;
+    const lines: string[] = [];
+    lines.push("# FaithStream Notes Export");
+    lines.push("");
+    lines.push(`Exported on: ${new Date().toLocaleDateString([], { year: "numeric", month: "long", day: "numeric" })}`);
+    lines.push(`Total notes: ${allNotes.length}`);
+    lines.push("");
+    lines.push("---");
+    lines.push("");
+
+    const sorted = [...allNotes].sort((a, b) => (a.videoTitle || "").localeCompare(b.videoTitle || ""));
+
+    for (const note of sorted) {
+      lines.push(`## ${note.videoTitle || "Untitled Video"}`);
+      if (note.updatedAt) {
+        const d = new Date(note.updatedAt as any);
+        lines.push(`*Last edited: ${d.toLocaleDateString([], { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" })}*`);
+      }
+      lines.push("");
+      lines.push(note.content || "*(no content)*");
+      lines.push("");
+      lines.push("---");
+      lines.push("");
+    }
+
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `faithstream-notes-${new Date().toISOString().split("T")[0]}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [allNotes]);
+
   // ─── Giving state ───
   const [giveMethods, setGiveMethods] = useState<PaymentMethod[]>([]);
   const [giveTxns, setGiveTxns] = useState<Transaction[]>([]);
@@ -212,8 +256,8 @@ export default function TVPage() {
         let userVideos: YouTubeVideo[] = [];
 
         if (state.playlist.length === 0) {
-          // First visit — auto-populate playlist with all videos
-          const all = await getVideos({ max: 500 });
+          // First visit — auto-populate playlist with recent videos (more can be added from the Playlist tab)
+          const all = await getVideos({ max: 15 });
           const valid = all.filter((v) => v.title && v.id);
           if (valid.length > 0) {
             const ids = valid.map((v) => v.id);
@@ -226,12 +270,12 @@ export default function TVPage() {
             userVideos = valid;
           }
         } else {
-          // Existing user — fetch all videos in one query and filter to playlist order
-          const all = await getVideos({ max: 500, includeHidden: false });
-          const videoMap = new Map(all.map((v) => [v.id, v]));
-          userVideos = state.playlist
-            .map((id) => videoMap.get(id))
-            .filter(Boolean) as YouTubeVideo[];
+          // Only load the current video for playback; rest load lazily when Playlist tab opens
+          const currentId = state.playlist[state.currentIndex];
+          if (currentId) {
+            const current = await getVideo(currentId);
+            if (current) userVideos = [current];
+          }
         }
 
         if (!mounted) return;
@@ -267,13 +311,19 @@ export default function TVPage() {
     return () => { mounted = false; };
   }, [activeTab]);
 
-  // ─── Lazy-load first page of "All Channel Videos" when playlist tab opens ───
+  // ─── Lazy-load all user's playlist videos + first page of "All Channel Videos" when playlist tab opens ───
   useEffect(() => {
     if (activeTab !== "playlist" || allVideosLoadedRef.current) return;
     allVideosLoadedRef.current = true;
     (async () => {
       setAllVideosLoading(true);
       try {
+        // Load full playlist video data (not just current video)
+        if (tvUserState && tvUserState.playlist.length > 0) {
+          const allPlaylistVids = await getVideosByIds(tvUserState.playlist);
+          setVideos(allPlaylistVids);
+        }
+        // Load paginated channel videos
         const { videos: page, lastPosition } = await getVideosPage(20);
         setAllPaginatedVideos(page);
         setAllVideosLastPos(lastPosition);
@@ -294,6 +344,18 @@ export default function TVPage() {
     } catch {}
     setAllVideosLoading(false);
   }, [allVideosLastPos, allVideosLoading, allVideosHasMore]);
+
+  // ─── Load video data when advancing to a video not yet in local state ───
+  useEffect(() => {
+    if (!tvUserState || tvUserState.playlist.length === 0) return;
+    const currentId = tvUserState.playlist[tvUserState.currentIndex];
+    if (!currentId) return;
+    if (!videos.some((v) => v.id === currentId)) {
+      getVideo(currentId).then((v) => {
+        if (v) setVideos((prev) => [...prev, v]);
+      });
+    }
+  }, [tvUserState?.currentIndex]);
 
   // ─── Advance to next video in user's playlist ───
   const advanceToNext = useCallback(() => {
@@ -623,23 +685,42 @@ export default function TVPage() {
     setGiveSubmitting(false);
   }, [giveSelectedAmount, giveCustomAmount, giveSelectedMethod, giveConfirmationCode, giveMethods, userName]);
 
-  // ─── Load saved notes from Firestore ───
+  // ─── Load saved notes from Firestore + localStorage draft (only when Notes tab is active) ───
   useEffect(() => {
-    if (!currentVideo || !auth.currentUser?.uid) return;
+    if (!currentVideo || !auth.currentUser?.uid || activeTab !== "notes") return;
     notesLoadedRef.current = false;
     const uid = auth.currentUser.uid;
     const vid = currentVideo.id;
     (async () => {
       try {
-        const saved = await getUserNote(uid, vid);
-        if (saved) setNoteContent(saved.content);
-        else setNoteContent("");
+        // First check localStorage for an unsaved draft
+        const draftKey = `tv_draft_${uid}_${vid}`;
+        const draft = typeof window !== "undefined" ? localStorage.getItem(draftKey) : null;
+        if (draft !== null) {
+          // Restore draft — user had unsaved text
+          setNoteContent(draft);
+        } else {
+          // No draft — try Firestore
+          const saved = await getUserNote(uid, vid);
+          if (saved) setNoteContent(saved.content);
+          else setNoteContent("");
+        }
       } catch {
         setNoteContent("");
       }
       notesLoadedRef.current = true;
     })();
-  }, [currentVideo?.id]);
+  }, [currentVideo?.id, activeTab]);
+
+  // ─── Save draft to localStorage on every keystroke ───
+  useEffect(() => {
+    if (!currentVideo || !auth.currentUser?.uid) return;
+    const uid = auth.currentUser.uid;
+    const vid = currentVideo.id;
+    try {
+      localStorage.setItem(`tv_draft_${uid}_${vid}`, noteContent);
+    } catch {}
+  }, [noteContent, currentVideo?.id]);
 
   // ─── Save notes to Firestore on change (with debounce) ───
   useEffect(() => {
@@ -668,6 +749,25 @@ export default function TVPage() {
     noteChangedRef.current = true;
     setNoteContent(value);
   }, []);
+
+  // ─── Explicit Save to Library button ───
+  const handleExplicitSave = useCallback(async () => {
+    if (!currentVideo || !auth.currentUser?.uid || !noteContent.trim()) return;
+    const uid = auth.currentUser.uid;
+    const vid = currentVideo.id;
+    const title = currentVideo.title;
+    setNoteSavingExplicit(true);
+    try {
+      await saveUserNote(uid, vid, title, noteContent);
+      setNoteLastSaved(new Date());
+      noteChangedRef.current = false;
+      // Clear localStorage draft after saving
+      localStorage.removeItem(`tv_draft_${uid}_${vid}`);
+      // Refresh the library
+      getAllUserNotes(uid).then(setAllNotes).catch(() => {});
+    } catch {}
+    setNoteSavingExplicit(false);
+  }, [noteContent, currentVideo]);
 
   // ─── Save on page unload / visibility hidden ───
   useEffect(() => {
@@ -805,8 +905,8 @@ export default function TVPage() {
       setTvUserState(fresh);
       // Also add the video data to local state
       if (!videos.some((v) => v.id === videoId)) {
-        const vids = await getVideosByIds([videoId]);
-        if (vids.length > 0) setVideos((prev) => [...prev, vids[0]]);
+        const vid = await getVideo(videoId);
+        if (vid) setVideos((prev) => [...prev, vid]);
       }
     } catch {}
     setAddingToPlaylist(null);
@@ -962,170 +1062,259 @@ export default function TVPage() {
       case "notes":
         return (
           <div className="tv-tab-pane">
-            {/* Current video notes editor */}
-            {currentVideo ? (
+            {/* Sub-tabs: Write | Saved Notes */}
+            <div className="tv-notes-sub-tabs">
+              <button
+                className={`tv-notes-sub-tab ${notesSubTab === "write" ? "active" : ""}`}
+                onClick={() => setNotesSubTab("write")}
+              >
+                <i className="fas fa-pen"></i> Write
+              </button>
+              <button
+                className={`tv-notes-sub-tab ${notesSubTab === "saved" ? "active" : ""}`}
+                onClick={() => setNotesSubTab("saved")}
+              >
+                <i className="fas fa-bookmark"></i> Saved Notes ({allNotes.length})
+              </button>
+            </div>
+
+            {/* ═══ WRITE TAB ═══ */}
+            {notesSubTab === "write" && (
               <>
-                <div className="tv-notes-current">
-                  <div className="tv-notes-current-label">Now Watching</div>
-                  <div className="tv-notes-current-title">{currentVideo.title}</div>
-                  {currentVideo.description && (
-                    <div className="tv-notes-current-desc">{currentVideo.description}</div>
-                  )}
-                  {tvUserState && (
-                    <div className="tv-notes-current-playlist">
-                      <i className="fas fa-list"></i> Video {tvUserState.currentIndex + 1} of {tvUserState.playlist.length}
+                {currentVideo ? (
+                  <>
+                    <div className="tv-notes-current">
+                      <div className="tv-notes-current-label">Now Watching</div>
+                      <div className="tv-notes-current-title">{currentVideo.title}</div>
+                      {currentVideo.description && (
+                        <div className="tv-notes-current-desc">{currentVideo.description}</div>
+                      )}
+                      {tvUserState && (
+                        <div className="tv-notes-current-playlist">
+                          <i className="fas fa-list"></i> Video {tvUserState.currentIndex + 1} of {tvUserState.playlist.length}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
 
-                <div className="tv-notes-section-title">
-                  <i className="fas fa-pen"></i> Your Notes
-                  <div className="tv-notes-toolbar-right">
-                    {noteSaving && <span className="tv-notes-saving"><i className="fas fa-spinner fa-spin"></i></span>}
+                    <div className="tv-notes-section-title">
+                      <i className="fas fa-pen"></i> Your Notes
+                      <div className="tv-notes-toolbar-right">
+                        {noteSaving && <span className="tv-notes-saving"><i className="fas fa-spinner fa-spin"></i></span>}
+                        <button
+                          className="tv-notes-preview-btn"
+                          onClick={handleExplicitSave}
+                          disabled={noteSavingExplicit || !noteContent.trim()}
+                          title="Save to Library"
+                        >
+                          {noteSavingExplicit ? (
+                            <i className="fas fa-spinner fa-spin"></i>
+                          ) : (
+                            <><i className="fas fa-save"></i></>
+                          )}
+                        </button>
+                        <button
+                          className={`tv-notes-preview-btn ${notesPreview ? "active" : ""}`}
+                          onClick={() => setNotesPreview((p) => !p)}
+                          title={notesPreview ? "Edit" : "Preview"}
+                        >
+                          <i className={`fas fa-${notesPreview ? "edit" : "eye"}`}></i>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Formatting toolbar (edit mode only) */}
+                    {!notesPreview && (
+                      <div className="tv-notes-toolbar">
+                        <button className="tv-notes-tb-btn" onClick={handleBold} title="Bold">
+                          <i className="fas fa-bold"></i>
+                        </button>
+                        <button className="tv-notes-tb-btn" onClick={handleItalic} title="Italic">
+                          <i className="fas fa-italic"></i>
+                        </button>
+                        <button className="tv-notes-tb-btn" onClick={handleHeading} title="Heading">
+                          <i className="fas fa-heading"></i>
+                        </button>
+                        <span className="tv-notes-tb-divider"></span>
+                        <button className="tv-notes-tb-btn" onClick={handleBullet} title="Bullet List">
+                          <i className="fas fa-list-ul"></i>
+                        </button>
+                        <button className="tv-notes-tb-btn" onClick={handleNumbered} title="Numbered List">
+                          <i className="fas fa-list-ol"></i>
+                        </button>
+                        <span className="tv-notes-tb-divider"></span>
+                        <button className="tv-notes-tb-btn" onClick={handleLink} title="Insert Link">
+                          <i className="fas fa-link"></i>
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Editor textarea or rendered preview */}
+                    {notesPreview ? (
+                      <div
+                        className="tv-notes-preview"
+                        dangerouslySetInnerHTML={{
+                          __html: noteContent.trim()
+                            ? renderNoteContent(noteContent)
+                            : '<p style="color: var(--text-tertiary); font-style: italic;">No notes yet for this video.</p>',
+                        }}
+                      />
+                    ) : (
+                      <textarea
+                        id="tv-notes-textarea"
+                        className="tv-notes-textarea"
+                        placeholder="Write your sermon notes, thoughts, or key verses here...&#10;&#10;Use the toolbar above to format your notes, or type directly:&#10;• **bold** and *italic*&#10;• ## Headings&#10;• - Bullet lists&#10;• 1. Numbered lists&#10;• [links](url)"
+                        value={noteContent}
+                        onChange={(e) => handleNoteChange(e.target.value)}
+                        rows={8}
+                      />
+                    )}
+
+                    <div className="tv-notes-hint">
+                      {noteSaving ? (
+                        <><i className="fas fa-spinner fa-spin"></i> Saving...</>
+                      ) : noteLastSaved ? (
+                        <><i className="fas fa-check-circle" style={{ color: "var(--success)" }}></i> Saved {noteLastSaved.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</>
+                      ) : (
+                        <><i className="fas fa-save"></i> Draft saved locally</>
+                      )}
+                    </div>
+
+                    {/* "Save to Library" bottom button */}
                     <button
-                      className={`tv-notes-preview-btn ${notesPreview ? "active" : ""}`}
-                      onClick={() => setNotesPreview((p) => !p)}
-                      title={notesPreview ? "Edit" : "Preview"}
+                      className="tv-notes-save-bottom"
+                      onClick={handleExplicitSave}
+                      disabled={noteSavingExplicit || !noteContent.trim()}
                     >
-                      <i className={`fas fa-${notesPreview ? "edit" : "eye"}`}></i>
+                      {noteSavingExplicit ? (
+                        <><i className="fas fa-spinner fa-spin"></i> Saving...</>
+                      ) : (
+                        <><i className="fas fa-save"></i> Save to Library</>
+                      )}
                     </button>
-                  </div>
-                </div>
-
-                {/* Formatting toolbar (edit mode only) */}
-                {!notesPreview && (
-                  <div className="tv-notes-toolbar">
-                    <button className="tv-notes-tb-btn" onClick={handleBold} title="Bold">
-                      <i className="fas fa-bold"></i>
-                    </button>
-                    <button className="tv-notes-tb-btn" onClick={handleItalic} title="Italic">
-                      <i className="fas fa-italic"></i>
-                    </button>
-                    <button className="tv-notes-tb-btn" onClick={handleHeading} title="Heading">
-                      <i className="fas fa-heading"></i>
-                    </button>
-                    <span className="tv-notes-tb-divider"></span>
-                    <button className="tv-notes-tb-btn" onClick={handleBullet} title="Bullet List">
-                      <i className="fas fa-list-ul"></i>
-                    </button>
-                    <button className="tv-notes-tb-btn" onClick={handleNumbered} title="Numbered List">
-                      <i className="fas fa-list-ol"></i>
-                    </button>
-                    <span className="tv-notes-tb-divider"></span>
-                    <button className="tv-notes-tb-btn" onClick={handleLink} title="Insert Link">
-                      <i className="fas fa-link"></i>
-                    </button>
-                  </div>
-                )}
-
-                {/* Editor textarea or rendered preview */}
-                {notesPreview ? (
-                  <div
-                    className="tv-notes-preview"
-                    dangerouslySetInnerHTML={{
-                      __html: noteContent.trim()
-                        ? renderNoteContent(noteContent)
-                        : '<p style="color: var(--text-tertiary); font-style: italic;">No notes yet for this video.</p>',
-                    }}
-                  />
+                  </>
                 ) : (
-                  <textarea
-                    id="tv-notes-textarea"
-                    className="tv-notes-textarea"
-                    placeholder="Write your sermon notes, thoughts, or key verses here...&#10;&#10;Use the toolbar above to format your notes, or type directly:&#10;• **bold** and *italic*&#10;• ## Headings&#10;• - Bullet lists&#10;• 1. Numbered lists&#10;• [links](url)"
-                    value={noteContent}
-                    onChange={(e) => handleNoteChange(e.target.value)}
-                    rows={8}
-                  />
+                  <div className="tv-tab-empty">
+                    <i className="fas fa-book-bible"></i>
+                    <span>No video playing. Notes will appear here when a video starts.</span>
+                  </div>
                 )}
-
-                <div className="tv-notes-hint">
-                  {noteSaving ? (
-                    <><i className="fas fa-spinner fa-spin"></i> Saving...</>
-                  ) : noteLastSaved ? (
-                    <><i className="fas fa-check-circle" style={{ color: "var(--success)" }}></i> Saved {noteLastSaved.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</>
-                  ) : (
-                    <><i className="fas fa-save"></i> Notes are saved automatically</>
-                  )}
-                </div>
               </>
-            ) : (
-              <div className="tv-tab-empty">
-                <i className="fas fa-book-bible"></i>
-                <span>No video playing. Notes will appear here when a video starts.</span>
-              </div>
             )}
 
-            {/* ─── All My Notes Library ─── */}
-            <div style={{ marginTop: 24 }}>
-              <div className="tv-notes-section-title">
-                <i className="fas fa-bookmark"></i> My Notes Library
-                <button
-                  className="tv-notes-refresh-btn"
-                  onClick={() => {
-                    if (!auth.currentUser?.uid) return;
-                    setAllNotesLoading(true);
-                    getAllUserNotes(auth.currentUser.uid).then(setAllNotes).catch(() => {}).finally(() => setAllNotesLoading(false));
-                  }}
-                  disabled={allNotesLoading}
-                >
-                  <i className={`fas fa-${allNotesLoading ? "spinner fa-spin" : "refresh"}`}></i>
-                </button>
-              </div>                    {allNotes.length === 0 ? (
-                <div className="tv-notes-empty">
-                  <i className="fas fa-book-open"></i>
-                  <span>
-                    {allNotesLoading ? "Loading your notes..." : "No saved notes yet. Start taking notes on a video!"}
-                  </span>
+            {/* ═══ SAVED NOTES TAB ═══ */}
+            {notesSubTab === "saved" && (
+              <div className="tv-notes-saved-section">
+                <div className="tv-notes-section-title">
+                  <i className="fas fa-bookmark"></i> My Notes Library
+                  <button
+                    className="tv-notes-export-btn"
+                    onClick={handleExportNotes}
+                    disabled={allNotes.length === 0}
+                    title="Export all notes as markdown"
+                  >
+                    <i className="fas fa-download"></i>
+                  </button>
+                  <button
+                    className="tv-notes-refresh-btn"
+                    onClick={() => {
+                      if (!auth.currentUser?.uid) return;
+                      setAllNotesLoading(true);
+                      getAllUserNotes(auth.currentUser.uid).then(setAllNotes).catch(() => {}).finally(() => setAllNotesLoading(false));
+                    }}
+                    disabled={allNotesLoading}
+                  >
+                    <i className={`fas fa-${allNotesLoading ? "spinner fa-spin" : "refresh"}`}></i>
+                  </button>
                 </div>
-              ) : (
-                <div className="tv-notes-list">
-                  {allNotes.map((n) => {
-                    const isCurrent = currentVideo?.id === n.videoId;
+
+                {/* Search bar */}
+                <div className="tv-notes-search-wrap">
+                  <i className="fas fa-search tv-notes-search-icon"></i>
+                  <input
+                    className="tv-notes-search-input"
+                    type="text"
+                    placeholder="Search notes by video title..."
+                    value={notesSearch}
+                    onChange={(e) => setNotesSearch(e.target.value)}
+                  />
+                  {notesSearch && (
+                    <button className="tv-notes-search-clear" onClick={() => setNotesSearch("")}>
+                      <i className="fas fa-times"></i>
+                    </button>
+                  )}
+                </div>
+
+                {(() => {
+                  const filtered = notesSearch
+                    ? allNotes.filter((n) => n.videoTitle?.toLowerCase().includes(notesSearch.toLowerCase()))
+                    : allNotes;
+                  if (filtered.length === 0) {
                     return (
-                      <div key={n.videoId} className={`tv-notes-list-item ${isCurrent ? "active" : ""}`}>
-                        <div className="tv-notes-list-item-top">
-                          <div className="tv-notes-list-item-title">
-                            {n.videoTitle || "Untitled Video"}
-                          </div>
-                          {n.updatedAt && (
-                            <div className="tv-notes-list-item-date">
-                              {new Date(n.updatedAt as any).toLocaleDateString([], { month: "short", day: "numeric" })}
-                            </div>
-                          )}
-                        </div>
-                        {n.content && (
-                          <div className="tv-notes-list-item-preview">
-                            {n.content.substring(0, 120)}{n.content.length > 120 ? "..." : ""}
-                          </div>
-                        )}
-                        <div className="tv-notes-list-item-actions">
-                          {!isCurrent && (
-                            <button
-                              className="tv-notes-list-delete"
-                              onClick={async () => {
-                                if (!auth.currentUser?.uid) return;
-                                try {
-                                  await deleteUserNote(auth.currentUser.uid, n.videoId);
-                                  setAllNotes((prev) => prev.filter((x) => x.videoId !== n.videoId));
-                                } catch {}
-                              }}
-                            >
-                              <i className="fas fa-trash"></i> Delete
-                            </button>
-                          )}
-                          {isCurrent && (
-                            <span className="tv-notes-list-current-badge">
-                              <i className="fas fa-play"></i> Now Playing
-                            </span>
-                          )}
-                        </div>
+                      <div className="tv-notes-empty">
+                        <i className="fas fa-search"></i>
+                        <span>
+                          {allNotesLoading ? "Loading your notes..." : notesSearch ? `No notes matching "${notesSearch}"` : "No saved notes yet. Write notes on a video and tap 'Save to Library'!"}
+                        </span>
                       </div>
                     );
-                  })}
-                </div>
-              )}
-            </div>
+                  }
+                  return (
+                    <div className="tv-notes-list">
+                      {filtered.map((n) => {
+                      const isCurrent = currentVideo?.id === n.videoId;
+                      return (
+                        <div key={n.videoId} className={`tv-notes-list-item ${isCurrent ? "active" : ""}`} onClick={() => setSelectedNote(n)}>
+                          <div className="tv-notes-list-item-top">
+                            <div className="tv-notes-list-item-title">
+                              {n.videoTitle || "Untitled Video"}
+                            </div>
+                            {n.updatedAt && (
+                              <div className="tv-notes-list-item-date">
+                                {new Date(n.updatedAt as any).toLocaleDateString([], { month: "short", day: "numeric" })}
+                              </div>
+                            )}
+                          </div>
+                          {n.content && (
+                            <div className="tv-notes-list-item-preview">
+                              {n.content.substring(0, 120)}{n.content.length > 120 ? "..." : ""}
+                            </div>
+                          )}
+                          <div className="tv-notes-list-item-actions">
+                            <button
+                              className="tv-notes-list-open-btn"
+                              onClick={(e) => { e.stopPropagation(); setSelectedNote(n); }}
+                            >
+                              <i className="fas fa-book-open"></i> Read
+                            </button>
+                            {!isCurrent && (
+                              <button
+                                className="tv-notes-list-delete"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  if (!auth.currentUser?.uid) return;
+                                  try {
+                                    await deleteUserNote(auth.currentUser.uid, n.videoId);
+                                    setAllNotes((prev) => prev.filter((x) => x.videoId !== n.videoId));
+                                  } catch {}
+                                }}
+                              >
+                                <i className="fas fa-trash"></i> Delete
+                              </button>
+                            )}
+                            {isCurrent && (
+                              <span className="tv-notes-list-current-badge">
+                                <i className="fas fa-play"></i> Now Playing
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  );
+                })()}
+              </div>
+            )}
           </div>
         );
 
@@ -1321,10 +1510,25 @@ export default function TVPage() {
               <i className="fas fa-video"></i> All Channel Videos {allPaginatedVideos.length > 0 ? `(${allPaginatedVideos.length} loaded)` : ""}
             </div>
             {allPaginatedVideos.length === 0 ? (
-              <div className="tv-tab-empty" style={{ padding: "20px 16px" }}>
-                <i className="fas fa-spinner fa-spin"></i>
-                <span>{allVideosLoading ? "Loading videos..." : "No videos available. Videos are synced from your YouTube channel."}</span>
-              </div>
+              allVideosLoading ? (
+                <>
+                  <div className="tv-skeleton-title"></div>
+                  <div className="tv-skeleton-list">
+                    {[1,2,3,4,5].map((i) => (
+                      <div key={i} className="tv-skeleton-card">
+                        <div className="tv-skeleton-thumb"></div>
+                        <div className="tv-skeleton-line"></div>
+                        <div className="tv-skeleton-line short"></div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="tv-tab-empty" style={{ padding: "20px 16px" }}>
+                  <i className="fas fa-search"></i>
+                  <span>No videos available. Videos are synced from your YouTube channel.</span>
+                </div>
+              )
             ) : (
               <>
                 <div className="tv-pl-all-videos">
@@ -1675,6 +1879,20 @@ export default function TVPage() {
         .tv-prayer-reply-text { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
 
         /* ─── NOTES ─── */
+        .tv-notes-sub-tabs {
+          display: flex; gap: 4px; margin-bottom: 14px;
+          background: var(--surface); border-radius: 12px; padding: 3px;
+        }
+        .tv-notes-sub-tab {
+          flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+          padding: 10px 12px; border-radius: 10px; font-size: 12px; font-weight: 600;
+          background: none; border: none; color: var(--text-tertiary); cursor: pointer;
+          transition: all 0.2s ease;
+        }
+        .tv-notes-sub-tab i { font-size: 12px; }
+        .tv-notes-sub-tab.active { background: var(--surface-elevated); color: var(--primary); }
+        .tv-notes-sub-tab:active:not(.active) { transform: scale(0.95); }
+
         .tv-notes-current {
           padding: 14px;
           background: var(--surface-card);
@@ -1781,7 +1999,28 @@ export default function TVPage() {
         .tv-notes-hint { font-size: 11px; color: var(--text-tertiary); margin-top: 8px; display: flex; align-items: center; gap: 4px; }
         .tv-notes-hint i { font-size: 10px; }
 
+        /* ─── Save to Library bottom button ─── */
+        .tv-notes-save-bottom {
+          width: 100%; padding: 14px; margin-top: 14px;
+          border-radius: var(--radius-md); font-size: 14px; font-weight: 700;
+          background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+          border: none; color: #fff; cursor: pointer;
+          display: flex; align-items: center; justify-content: center; gap: 8px;
+          transition: all 0.2s ease;
+        }
+        .tv-notes-save-bottom:active { transform: scale(0.97); }
+        .tv-notes-save-bottom:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+
         /* ─── Notes library ─── */
+        .tv-notes-export-btn {
+          width: 28px; height: 28px; border-radius: 6px;
+          background: var(--surface); border: 1px solid var(--border);
+          color: var(--text-tertiary); font-size: 11px;
+          display: flex; align-items: center; justify-content: center;
+          cursor: pointer; transition: all 0.15s;
+        }
+        .tv-notes-export-btn:active { transform: scale(0.9); }
+        .tv-notes-export-btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .tv-notes-refresh-btn {
           margin-left: auto;
           width: 28px; height: 28px; border-radius: 6px;
@@ -1792,6 +2031,31 @@ export default function TVPage() {
         }
         .tv-notes-refresh-btn:active { transform: scale(0.9); }
         .tv-notes-refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        /* ─── Saved notes search bar ─── */
+        .tv-notes-search-wrap {
+          position: relative; margin-bottom: 12px;
+        }
+        .tv-notes-search-icon {
+          position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+          font-size: 13px; color: var(--text-tertiary); pointer-events: none;
+        }
+        .tv-notes-search-input {
+          width: 100%; padding: 12px 36px 12px 40px;
+          background: var(--surface); border: 1px solid var(--border);
+          border-radius: 10px; color: var(--text-primary); font-size: 14px;
+          outline: none; transition: all 0.2s;
+        }
+        .tv-notes-search-input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(232,168,56,0.08); }
+        .tv-notes-search-input::placeholder { color: var(--text-tertiary); }
+        .tv-notes-search-clear {
+          position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+          width: 24px; height: 24px; border-radius: 6px;
+          background: var(--surface-elevated); border: none; color: var(--text-secondary); font-size: 11px;
+          display: flex; align-items: center; justify-content: center;
+          cursor: pointer; transition: all 0.15s;
+        }
+        .tv-notes-search-clear:active { transform: translateY(-50%) scale(0.85); }
+
         .tv-notes-empty {
           display: flex; flex-direction: column; align-items: center; gap: 8px;
           padding: 24px 16px; text-align: center;
@@ -1805,7 +2069,9 @@ export default function TVPage() {
           border: 1px solid var(--border);
           border-radius: var(--radius-md);
           transition: all 0.15s;
+          cursor: pointer;
         }
+        .tv-notes-list-item:active { transform: scale(0.97); background: var(--surface); }
         .tv-notes-list-item.active {
           border-color: rgba(232,168,56,0.2);
           background: rgba(232,168,56,0.04);
@@ -1842,6 +2108,97 @@ export default function TVPage() {
           font-size: 10px; font-weight: 700; color: var(--primary);
           display: flex; align-items: center; gap: 4px;
         }
+        .tv-notes-list-open-btn {
+          padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 600;
+          background: rgba(232,168,56,0.08); border: 1px solid rgba(232,168,56,0.12);
+          color: var(--primary); cursor: pointer;
+          display: flex; align-items: center; gap: 4px;
+          transition: all 0.15s;
+        }
+        .tv-notes-list-open-btn:active { transform: scale(0.95); }
+        .tv-notes-saved-section { margin-top: 0; }
+
+        /* ─── Note Reader Modal ─── */
+        .tv-reader-overlay {
+          position: fixed; inset: 0; z-index: 900;
+          background: rgba(0,0,0,0.85);
+          backdrop-filter: blur(12px);
+          -webkit-backdrop-filter: blur(12px);
+          display: flex; flex-direction: column;
+          animation: tvReaderIn 0.25s ease;
+        }
+        @keyframes tvReaderIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        .tv-reader-top {
+          display: flex; align-items: center; gap: 8px;
+          padding: 12px 16px;
+          background: var(--bg);
+          border-bottom: 1px solid var(--border);
+        }
+        .tv-reader-back {
+          width: 40px; height: 40px; border-radius: 50%;
+          background: rgba(255,255,255,0.06); border: none;
+          color: var(--text-secondary); font-size: 16px;
+          display: flex; align-items: center; justify-content: center;
+          cursor: pointer; transition: all 0.15s;
+        }
+        .tv-reader-back:active { background: rgba(255,255,255,0.12); transform: scale(0.9); }
+        .tv-reader-title {
+          flex: 1; font-size: 15px; font-weight: 700; color: var(--text-primary);
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .tv-reader-edit-btn {
+          padding: 6px 12px; border-radius: 8px; font-size: 11px; font-weight: 600;
+          background: rgba(232,168,56,0.08); border: 1px solid rgba(232,168,56,0.12);
+          color: var(--primary); cursor: pointer;
+          display: flex; align-items: center; gap: 4px;
+          transition: all 0.15s;
+        }
+        .tv-reader-edit-btn:active { transform: scale(0.95); }
+        .tv-reader-delete-btn {
+          padding: 6px 12px; border-radius: 8px; font-size: 11px; font-weight: 600;
+          background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.12);
+          color: #EF4444; cursor: pointer;
+          display: flex; align-items: center; gap: 4px;
+          transition: all 0.15s;
+        }
+        .tv-reader-delete-btn:active { transform: scale(0.95); }
+        .tv-reader-body {
+          flex: 1; overflow-y: auto;
+          -webkit-overflow-scrolling: touch;
+          padding: 20px 16px;
+        }
+        .tv-reader-body::-webkit-scrollbar { display: none; }
+        .tv-reader-meta {
+          display: flex; align-items: center; gap: 10px;
+          font-size: 11px; color: var(--text-tertiary);
+          margin-bottom: 16px; flex-wrap: wrap;
+        }
+        .tv-reader-content {
+          color: var(--text-primary); font-size: 15px; line-height: 1.7;
+        }
+        .tv-reader-content p { margin-bottom: 10px; }
+        .tv-reader-content strong { color: var(--text-primary); font-weight: 700; }
+        .tv-reader-content em { color: var(--primary-light); }
+        .tv-reader-content h3 { font-size: 17px; font-weight: 700; margin: 16px 0 8px; color: var(--primary); }
+        .tv-reader-content h4 { font-size: 15px; font-weight: 700; margin: 14px 0 6px; color: var(--primary-light); }
+        .tv-reader-content ul, .tv-reader-content ol { margin: 8px 0; padding-left: 20px; }
+        .tv-reader-content li { margin-bottom: 4px; }
+        .tv-reader-content a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+        .tv-reader-content code {
+          padding: 2px 6px; border-radius: 4px;
+          background: var(--surface-elevated);
+          font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
+          font-size: 14px;
+          color: var(--primary-light);
+        }
+        .tv-reader-empty {
+          display: flex; flex-direction: column; align-items: center; justify-content: center;
+          gap: 12px; padding: 60px 20px; color: var(--text-tertiary); text-align: center;
+        }
+        .tv-reader-empty i { font-size: 40px; opacity: 0.3; }
 
         /* ─── GIVE TAB ─── */
         .tv-give-tab { padding: 0 4px; }
@@ -1924,6 +2281,47 @@ export default function TVPage() {
         .giving-tx-details { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
         .giving-tx-feedback { font-size: 12px; color: var(--text-secondary); margin-top: 6px; padding: 6px 10px; background: var(--surface); border-radius: 6px; font-style: italic; }
         .giving-tx-feedback strong { color: var(--primary); font-style: normal; }
+
+        /* ─── Shimmer skeleton ─── */
+        @keyframes tvShimmer {
+          0% { background-position: -200px 0; }
+          100% { background-position: 200px 0; }
+        }
+        .tv-skeleton-title {
+          width: 140px; height: 14px; border-radius: 6px;
+          background: linear-gradient(90deg, #1A1A1A 25%, #2A2A2A 50%, #1A1A1A 75%);
+          background-size: 400px 100%;
+          animation: tvShimmer 1.4s ease-in-out infinite;
+          margin-bottom: 14px;
+        }
+        .tv-skeleton-list { display: flex; flex-direction: column; gap: 8px; }
+        .tv-skeleton-card {
+          display: flex; align-items: center; gap: 10px;
+          padding: 10px 12px;
+          background: #1A1A1A;
+          border: 1px solid #2A2A2A;
+          border-radius: 8px;
+          height: 54px;
+        }
+        .tv-skeleton-thumb {
+          width: 40px; height: 30px; border-radius: 4px; flex-shrink: 0;
+          background: linear-gradient(90deg, #242424 25%, #333 50%, #242424 75%);
+          background-size: 400px 100%;
+          animation: tvShimmer 1.4s ease-in-out infinite;
+        }
+        .tv-skeleton-line {
+          flex: 1; height: 12px; border-radius: 6px;
+          background: linear-gradient(90deg, #242424 25%, #333 50%, #242424 75%);
+          background-size: 400px 100%;
+          animation: tvShimmer 1.4s ease-in-out infinite;
+        }
+        .tv-skeleton-line.short { max-width: 60px; }
+        .tv-skeleton-load-more {
+          width: 100%; height: 40px; border-radius: 10px; margin-top: 12px;
+          background: linear-gradient(90deg, #1A1A1A 25%, #2A2A2A 50%, #1A1A1A 75%);
+          background-size: 400px 100%;
+          animation: tvShimmer 1.4s ease-in-out infinite;
+        }
 
         /* ─── SCHEDULE ─── */
         .tv-schedule-header {
@@ -2143,18 +2541,57 @@ export default function TVPage() {
         }
 
         .tv-loading-screen {
-          height: 100%; display: flex; flex-direction: column;
-          align-items: center; justify-content: center; gap: 12px;
+          position: fixed; inset: 0; z-index: 99999;
+          display: flex; flex-direction: column;
+          align-items: center; justify-content: center;
           background: #000;
         }
-        .tv-loading-spinner {
-          width: 40px; height: 40px;
-          border: 3px solid rgba(255,255,255,0.05);
-          border-top-color: var(--primary);
-          border-radius: 50%;
-          animation: tvSpin 0.8s linear infinite;
+        .tv-loading-ring {
+          width: 72px; height: 72px; border-radius: 50%;
+          border: 3px solid rgba(232,168,56,0.08);
+          border-top-color: #E8A838; border-right-color: #D4762A;
+          animation: tvLoadingSpin 0.9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+          display: flex; align-items: center; justify-content: center;
+          position: relative;
         }
-        @keyframes tvSpin { to { transform: rotate(360deg); } }
+        .tv-loading-ring-inner {
+          width: 48px; height: 48px; border-radius: 50%;
+          border: 2px solid rgba(232,168,56,0.06);
+          border-bottom-color: #E8A838; border-left-color: #D4762A;
+          animation: tvLoadingSpin 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite reverse;
+        }
+        .tv-loading-icon {
+          position: absolute; font-size: 20px; color: #E8A838;
+          animation: tvLoadingPulse 1.6s ease-in-out infinite;
+        }
+        .tv-loading-brand {
+          margin-top: 24px; font-size: 15px; font-weight: 800;
+          letter-spacing: -0.3px; color: #E8A838;
+          animation: tvLoadingFade 1.6s ease-in-out infinite;
+        }
+        .tv-loading-dots {
+          margin-top: 10px; display: flex; gap: 6px;
+        }
+        .tv-loading-dot {
+          width: 6px; height: 6px; border-radius: 50%;
+          background: #E8A838;
+          animation: tvLoadingBounce 1.2s ease-in-out infinite;
+        }
+        .tv-loading-dot:nth-child(2) { animation-delay: 0.2s; }
+        .tv-loading-dot:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes tvLoadingSpin { to { transform: rotate(360deg); } }
+        @keyframes tvLoadingPulse {
+          0%, 100% { opacity: 0.4; transform: scale(0.9); }
+          50% { opacity: 1; transform: scale(1.1); }
+        }
+        @keyframes tvLoadingFade {
+          0%, 100% { opacity: 0.5; }
+          50% { opacity: 1; }
+        }
+        @keyframes tvLoadingBounce {
+          0%, 100% { transform: translateY(0); opacity: 0.3; }
+          50% { transform: translateY(-6px); opacity: 1; }
+        }
       `}</style>
 
       <ToastBridge />
@@ -2163,8 +2600,16 @@ export default function TVPage() {
         {/* ─── PLAYER SECTION ─── */}
         {loading ? (
           <div className="tv-loading-screen">
-            <div className="tv-loading-spinner"></div>
-            <p style={{ fontSize: 14, color: "var(--text-tertiary)" }}>Loading TV...</p>
+            <div className="tv-loading-ring">
+              <div className="tv-loading-ring-inner"></div>
+              <i className="fas fa-tv tv-loading-icon"></i>
+            </div>
+            <div className="tv-loading-brand">Church TV</div>
+            <div className="tv-loading-dots">
+              <div className="tv-loading-dot"></div>
+              <div className="tv-loading-dot"></div>
+              <div className="tv-loading-dot"></div>
+            </div>
           </div>
         ) : (
           <>
@@ -2241,7 +2686,9 @@ export default function TVPage() {
                   </button>
                 ))}
               </div>
-            </div>            {/* ─── TAB CONTENT ─── */}
+            </div>
+
+            {/* ─── TAB CONTENT ─── */}
             <div className="tv-tab-content">
               {renderTabContent()}
             </div>
@@ -2249,6 +2696,70 @@ export default function TVPage() {
         )}
         <BottomNavBar activeTab="tv" />
       </div>
+
+      {/* ─── NOTE READER MODAL ─── */}
+      {selectedNote && (
+        <div className="tv-reader-overlay">
+          <div className="tv-reader-top">
+            <button className="tv-reader-back" onClick={() => setSelectedNote(null)}>
+              <i className="fas fa-arrow-left"></i>
+            </button>
+            <div className="tv-reader-title">
+              {selectedNote.videoTitle || "Note"}
+            </div>
+            <button
+              className="tv-reader-edit-btn"
+              onClick={() => {
+                if (!selectedNote) return;
+                setNoteContent(selectedNote.content || "");
+                setNotesSubTab("write");
+                setSelectedNote(null);
+              }}
+            >
+              <i className="fas fa-pen"></i>
+            </button>
+            <button
+              className="tv-reader-delete-btn"
+              onClick={async () => {
+                if (!auth.currentUser?.uid) return;
+                try {
+                  await deleteUserNote(auth.currentUser.uid, selectedNote.videoId);
+                  setAllNotes((prev) => prev.filter((x) => x.videoId !== selectedNote.videoId));
+                  setSelectedNote(null);
+                } catch {}
+              }}
+            >
+              <i className="fas fa-trash"></i>
+            </button>
+          </div>
+          <div className="tv-reader-body">
+            <div className="tv-reader-meta">
+              {selectedNote.updatedAt && (
+                <span>
+                  <i className="fas fa-calendar" style={{ marginRight: 4 }}></i>
+                  {new Date(selectedNote.updatedAt as any).toLocaleDateString([], {
+                    year: "numeric", month: "long", day: "numeric",
+                    hour: "2-digit", minute: "2-digit",
+                  })}
+                </span>
+              )}
+              {currentVideo?.id === selectedNote.videoId && (
+                <span style={{ color: "var(--primary)" }}>
+                  <i className="fas fa-play" style={{ marginRight: 4 }}></i>Now Playing
+                </span>
+              )}
+            </div>
+            <div
+              className="tv-reader-content"
+              dangerouslySetInnerHTML={{
+                __html: selectedNote.content
+                  ? renderNoteContent(selectedNote.content)
+                  : '<p style="color: var(--text-tertiary); font-style: italic;">This note has no content.</p>',
+              }}
+            />
+          </div>
+        </div>
+      )}
     </>
   );
 }

@@ -31,17 +31,17 @@ const tabRoutes: Record<string, string> = {
 export default function AdminBottomNav() {
   const router = useRouter();
   const pathname = usePathname();
-  const [isTablet, setIsTablet] = useState(false);
+  const [showSidebar, setShowSidebar] = useState(false);
 
   useEffect(() => {
-    const check = () => setIsTablet(window.innerWidth >= 768);
+    const check = () => setShowSidebar(window.innerWidth >= 1400);
     check();
     window.addEventListener("resize", check);
     return () => window.removeEventListener("resize", check);
   }, []);
 
   const activeTab = Object.entries(tabRoutes).find(
-    ([, route]) => pathname === route || pathname?.startsWith(route + "/")
+    ([, route]) => pathname === route || (route !== "/admin" && pathname?.startsWith(route + "/"))
   )?.[0] || "dashboard";
 
   const navigate = (tab: string) => {
@@ -50,7 +50,7 @@ export default function AdminBottomNav() {
   };
 
   return (
-    <nav className={isTablet ? "admin-sidebar" : "bottom-nav"}>
+    <nav className={showSidebar ? "admin-sidebar" : "bottom-nav"}>
       {tabs.map((tab) => (
         <button
           key={tab.tab}

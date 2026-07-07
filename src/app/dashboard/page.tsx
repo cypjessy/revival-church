@@ -1052,7 +1052,7 @@ export default function DashboardPage() {
             <i className="fas fa-play"></i>
             <span>{tvStartCountdown > 0 ? `Starting in ${tvStartCountdown}s` : 'Start TV'}</span>
           </button>
-          <div className="tv-start-hint">Starts TV · Skips to next if already playing</div>
+          <div className="tv-start-hint">Click to switch playlist</div>
 
           {/* Playlist info */}
           {tvUserState && tvUserState.playlist.length === 0 && (
@@ -1193,7 +1193,7 @@ export default function DashboardPage() {
           </div>
           <div className="vg-scroll">
             {recentVideos.map((v) => (
-              <div key={v.id} className="vg-card" onClick={() => router.push("/tv")}>
+              <div key={v.id} className="vg-card" onClick={() => router.push(`/watch/${v.id}`)}>
                 <div className="vg-thumb-wrap">
                   <img src={v.thumbnail} alt={v.title} loading="lazy" />
                   <span className="vg-duration">{Math.floor(v.duration / 60)}:{(v.duration % 60).toString().padStart(2, "0")}</span>
@@ -1216,7 +1216,7 @@ export default function DashboardPage() {
           </div>
           <div className="vg-scroll">
             {weeklyVideos.map((v) => (
-              <div key={v.id} className="vg-card" onClick={() => router.push("/tv")}>
+              <div key={v.id} className="vg-card" onClick={() => router.push(`/watch/${v.id}`)}>
                 <div className="vg-thumb-wrap">
                   <img src={v.thumbnail} alt={v.title} loading="lazy" />
                   <span className="vg-duration">{Math.floor(v.duration / 60)}:{(v.duration % 60).toString().padStart(2, "0")}</span>
@@ -2239,7 +2239,7 @@ export default function DashboardPage() {
         .tv-start-btn:active { transform: scale(0.97); }
         .tv-start-btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
         .tv-start-btn i { font-size: 13px; }
-        .tv-start-hint { font-size: 10px; color: var(--text-tertiary); text-align: center; padding: 4px 16px 0; opacity: 0.7; }
+        .tv-start-hint { font-size: 12px; color: var(--text-secondary); text-align: center; padding: 6px 16px 0; font-weight: 500; }
 
         /* ===== VIDEO GALLERY ===== */
         .vg-scroll {

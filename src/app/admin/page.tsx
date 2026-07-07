@@ -1154,33 +1154,7 @@ export default function AdminPage() {
             font-weight: 600; margin-top: 6px; text-decoration: none;
         }
 
-        /* ========== QUICK ACTIONS FLOATING BAR ========== */
-        .qa-float {
-            position: fixed; bottom: 72px; left: 0; right: 0;
-            display: flex; gap: 6px; padding: 8px 12px;
-            background: rgba(15,15,15,0.92);
-            backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-            border-top: 1px solid var(--border);
-            z-index: 800;
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
-        }
-        .qa-float::-webkit-scrollbar { display: none; }
-        @media (min-width: 480px) {
-            .qa-float { max-width: 480px; margin: 0 auto; }
-        }
-        @media (min-width: 768px) {
-            .qa-float { left: 72px; padding: 10px 16px; gap: 8px; }
-        }
-        .qa-float-btn {
-            flex-shrink: 0; display: flex; align-items: center; gap: 6px;
-            padding: 8px 14px; border-radius: 12px; border: 1px solid var(--border);
-            background: var(--surface); color: var(--text-primary);
-            font-size: 12px; font-weight: 600; cursor: pointer;
-            transition: all 0.15s ease; white-space: nowrap;
-        }
-        .qa-float-btn:active { background: var(--surface-elevated); transform: scale(0.95); }
-        .qa-float-btn i { font-size: 14px; }
+
 
         /* ========== SETUP CHECKLIST ========== */
         .setup-overlay {
@@ -1457,7 +1431,7 @@ export default function AdminPage() {
         .tv-start-btn:active { transform: scale(0.97); }
         .tv-start-btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
         .tv-start-btn i { font-size: 13px; }
-        .tv-start-hint { font-size: 10px; color: var(--text-tertiary); text-align: center; padding: 4px 16px 0; opacity: 0.7; }
+        .tv-start-hint { font-size: 12px; color: var(--text-secondary); text-align: center; padding: 6px 16px 0; font-weight: 500; }
         .tv-next-slot {
           display: flex; align-items: center; gap: 6px;
           padding: 8px 12px;
@@ -1817,7 +1791,7 @@ export default function AdminPage() {
                 <i className="fas fa-play"></i>
                 <span>{tvStartCountdown > 0 ? `Starting in ${tvStartCountdown}s` : 'Start TV'}</span>
               </button>
-              <div className="tv-start-hint">Starts TV · Skips to next if already playing</div>
+              <div className="tv-start-hint">Click to switch playlist</div>
 
               {tvUserState && tvUserState.playlist.length === 0 && (
                 <div className="tv-next-slot">
@@ -2195,20 +2169,6 @@ export default function AdminPage() {
 
         </div>
 
-        {/* QUICK ACTIONS FLOATING BAR */}
-        {!showSetup && (
-        <div className="qa-float">
-          <button className="qa-float-btn" onClick={() => router.push("/admin/content")}>
-            <i className="fas fa-upload" style={{ color: "var(--primary)" }}></i> Upload Media
-          </button>
-          <button className="qa-float-btn" onClick={() => router.push("/admin/radio")}>
-            <i className="fas fa-list" style={{ color: "var(--gradient-blue)" }}></i> New Playlist
-          </button>
-          <button className="qa-float-btn" onClick={() => router.push("/admin/radio")}>
-            <i className="fas fa-microphone" style={{ color: "var(--error)" }}></i> Go Live
-          </button>
-        </div>
-        )}
 
         {!showSetup && <AdminBottomNav />}
       </div>

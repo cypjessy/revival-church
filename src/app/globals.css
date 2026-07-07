@@ -2,18 +2,19 @@
    This file only contains global responsive overrides. */
 
 /* ── Tablet+ responsive container width ── */
-/* Fill the full screen on tablets instead of a phone-sized column */
-@media (min-width: 768px) {
-  .app-container { max-width: 100% !important; margin: 0 !important; border: none !important; }
+/* Full width on tablets (same edge-to-edge as the Android app) */
+/* Also override the 480px phone centered-column on large phones / small tablets */
+@media (min-width: 480px) {
+  .app-container { width: 100% !important; max-width: 100% !important; margin: 0 !important; border: none !important; }
 }
 @media (min-width: 1400px) {
   .app-container { max-width: 1200px !important; margin: 0 auto !important; border-left: 1px solid var(--border) !important; border-right: 1px solid var(--border) !important; }
 }
 
-/* ── Admin sidebar (replaces bottom nav on tablets) ── */
-@media (min-width: 768px) {
+/* ── Admin sidebar (replaces bottom nav on desktop 1400px+) ── */
+@media (min-width: 1400px) {
   .admin-sidebar {
-    position: fixed; left: 0; top: 0; bottom: 0; width: 72px;
+    position: fixed; left: 0; top: 0; bottom: 0; width: 80px;
     background: rgba(15,15,15,0.95);
     backdrop-filter: blur(20px) saturate(180%);
     border-right: 1px solid var(--border);
@@ -29,8 +30,8 @@
     border-radius: 0;
   }
   .admin-sidebar .nav-item.active { color: var(--primary); }
-  .admin-sidebar .nav-item i { font-size: 20px; }
-  .admin-sidebar .nav-item span { font-size: 9px; font-weight: 600; text-align: center; line-height: 1.2; }
+  .admin-sidebar .nav-item i { font-size: 22px; }
+  .admin-sidebar .nav-item span { font-size: 10px; font-weight: 600; text-align: center; line-height: 1.2; }
   .admin-sidebar .nav-badge {
     position: absolute; top: 4px; right: 12px;
     width: 8px; height: 8px;
@@ -40,33 +41,32 @@
 
   /* Push app content to the right of the sidebar */
   .app-container {
-    margin-left: 72px !important;
-    width: calc(100% - 72px) !important;
+    margin-left: 80px !important;
+    width: calc(100% - 80px) !important;
     border-left: none !important;
   }
-
-  /* Scale up radios page tab-bar font for tablet */
-  .tab-btn { font-size: 14px !important; padding: 10px 18px !important; }
-  .tab-bar { padding: 10px 16px !important; gap: 4px !important; }
 }
 
-@media (min-width: 1024px) {
-  .admin-sidebar { width: 80px; }
-  .app-container { margin-left: 80px !important; width: calc(100% - 80px) !important; }
-  .admin-sidebar .nav-item i { font-size: 22px; }
-  .admin-sidebar .nav-item span { font-size: 10px; }
-}
-
-/* ── Public bottom nav: full width on tablets ── */
+/* ── Bottom nav: full width on tablets ── */
 @media (min-width: 768px) {
-  .bottom-nav:not(:has(.admin-nav-item)) {
-    max-width: 100% !important;
-  }
+  .bottom-nav { max-width: 100% !important; }
 }
 @media (min-width: 1400px) {
-  .bottom-nav:not(:has(.admin-nav-item)) {
-    max-width: 1200px !important;
-  }
+  .bottom-nav { max-width: 1200px !important; }
+}
+
+/* ── Tablet-optimised content spacing ── */
+@media (min-width: 768px) {
+  .content-scroll { padding: 0 24px 80px !important; }
+  .tv-top-header { padding: 10px 24px !important; }
+  .form-input { padding: 16px 18px !important; font-size: 15px !important; }
+  .tv-grid { gap: 16px; }
+  .stats-grid { grid-template-columns: repeat(4, 1fr); gap: 14px; }
+}
+@media (min-width: 1024px) {
+  .content-scroll { padding: 0 32px 80px !important; }
+  .tv-top-header { padding: 12px 32px !important; }
+  .tv-grid { grid-template-columns: repeat(3, 1fr); gap: 18px; }
 }
 
 
