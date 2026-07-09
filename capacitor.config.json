@@ -27,7 +27,7 @@
       "iconColor": "#E8A838"
     },
     "CapacitorHttp": {
-      "enabled": true
+      "enabled": false
     }
   }
 }
