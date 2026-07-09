@@ -61,7 +61,7 @@ export default function RadioPlayer() {
         <div className="radio-live-badge"><span className="pulse"></span>Live Now</div>
         <div className="radio-info">
           <div className="radio-title">Sunday Morning Worship</div>
-          <div className="radio-subtitle">CHRISTIAN REVIVAL CHURCH · Live Stream</div>
+          <div className="radio-subtitle">MOUNTAIN OF DELIVERANCE CHURCH · Live Stream</div>
           <div className="radio-controls">
             <button className="radio-play-btn" ref={playBtnRef}>
               <i className="fas fa-play"></i>

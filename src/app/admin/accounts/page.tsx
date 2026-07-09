@@ -5,13 +5,98 @@ import { useRouter } from "next/navigation";
 import AdminBottomNav from "@/components/admin/AdminBottomNav";
 import ToastBridge from "@/components/dashboard/ToastBridge";
 import { hapticSuccess } from "@/lib/haptics";
-import type { Timestamp } from "firebase/firestore";
+import { Timestamp } from "firebase/firestore";
 import { getAdminUsers } from "@/lib/users";
 import type { UserProfile } from "@/lib/users";
 import PremiumTopBar from "@/components/shared/PremiumTopBar";
+import SubscriptionsTab from "@/components/admin/SubscriptionsTab";
+import type { SubscriptionPayment } from "@/lib/subscriptions";
+
+// ═══════════════════════════════════════════════
+// Paystack Redirect Callback
+// When the user pays on mobile (redirect flow), Paystack redirects back
+// to this page with ?reference=xxx&trxref=yyy in the URL.
+// We detect this and verify the payment.
+// ═══════════════════════════════════════════════
+
+interface PaystackPendingPayment {
+  reference: string;
+  planKey: string;
+  amount: number;
+  isTest: boolean;
+  type: 'payment' | 'upgrade';
+}
+
+async function handlePaystackCallback(reference: string) {
+  const pendingJson = sessionStorage.getItem('paystack_pending');
+  if (!pendingJson) return;
+
+  sessionStorage.removeItem('paystack_pending');
+  let pending: PaystackPendingPayment;
+  try {
+    pending = JSON.parse(pendingJson);
+  } catch { return; }
+
+  try {
+    // Call verify endpoint
+    const res = await fetch('/api/paystack/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reference }),
+    });
+    const verifyData = await res.json();
+
+    if (!verifyData.verified) {
+      window.dispatchEvent(new CustomEvent('show-toast', {
+        detail: { title: 'Payment Failed', message: 'Could not verify payment. Please check your Paystack dashboard.', type: 'error', duration: 5000 },
+      }));
+      return;
+    }
+
+    // Record the payment to Firestore
+    const { recordPayment, getSubscriptionStatus, getCurrentBillingPeriod } = await import('@/lib/subscriptions');
+    const billingPeriod = getCurrentBillingPeriod();
+
+    await recordPayment({
+      reference: verifyData.reference || reference,
+      amount: verifyData.amount || pending.amount,
+      plan: pending.planKey as 'VPS S' | 'VPS M',
+      status: 'paid',
+      paidAt: Timestamp.now(),
+      billingPeriod,
+      email: 'admin@mountainofdeliverance.org',
+      channel: verifyData.channel || 'paystack',
+      church_id: process.env.NEXT_PUBLIC_CHURCH_ID || 'mountain_of_deliverance',
+      isTest: pending.isTest,
+    });
+
+    // If upgrade, save the new plan
+    if (pending.type === 'upgrade') {
+      const { updatePlan } = await import('@/lib/subscriptions');
+      await updatePlan('VPS M').catch(() => {});
+    }
+
+    // Refresh subscription status
+    window.dispatchEvent(new CustomEvent('payments-refresh'));
+    window.dispatchEvent(new CustomEvent('show-toast', {
+      detail: { title: 'Payment Successful', message: `${pending.type === 'upgrade' ? 'Plan upgrade' : 'Subscription'} payment of KES ${pending.amount.toLocaleString()} confirmed`, type: 'success', duration: 5000 },
+    }));
+
+    // Reload the page to refresh all state
+    setTimeout(() => {
+      window.location.href = '/admin/accounts';
+    }, 1500);
+  } catch (err: any) {
+    console.error('[Paystack callback] Error:', err);
+    window.dispatchEvent(new CustomEvent('show-toast', {
+      detail: { title: 'Verification Error', message: err.message || 'Could not verify payment after redirect', type: 'error', duration: 5000 },
+    }));
+  }
+}
 
 export default function AdminAccountsPage() {
   const router = useRouter();
+  const [activeTab, setActiveTab] = useState<"accounts" | "subscriptions">("accounts");
   const [admins, setAdmins] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -32,6 +117,19 @@ export default function AdminAccountsPage() {
   }, []);
 
   useEffect(() => { setTimeout(() => loadAdmins(), 0); }, [loadAdmins]);
+
+  // ════ Paystack Redirect Callback ════
+  // After paying on mobile (Capacitor), Paystack redirects back to this page
+  // with query params. Detect and verify the payment.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const ref = params.get('reference') || params.get('trxref');
+    if (ref) {
+      // Clean up URL to prevent double-processing on re-render
+      window.history.replaceState({}, '', '/admin/accounts');
+      handlePaystackCallback(ref);
+    }
+  }, []);
 
   const handleCopyLink = async () => {
     const token = process.env.NEXT_PUBLIC_ADMIN_REG_TOKEN || "admin-secret-token";
@@ -344,6 +442,84 @@ export default function AdminAccountsPage() {
           title="Admin Accounts"
         />
 
+        {/* ════ Tab Bar ════ */}
+        <div style={{
+          display: "flex",
+          borderBottom: "1px solid var(--border)",
+          flexShrink: 0,
+          background: "var(--bg)",
+          padding: "0 8px",
+          gap: 0,
+        }}>
+          <button
+            onClick={() => setActiveTab("accounts")}
+            style={{
+              flex: 1,
+              padding: "12px 6px",
+              background: "none",
+              border: "none",
+              color: activeTab === "accounts" ? "var(--primary)" : "var(--text-tertiary)",
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: "pointer",
+              transition: "all 0.2s ease",
+              position: "relative",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 5,
+            }}
+          >
+            <i className="fas fa-user-shield"></i>
+            Accounts
+            {activeTab === "accounts" && (
+              <div style={{
+                position: "absolute",
+                bottom: 0,
+                left: "15%",
+                right: "15%",
+                height: 3,
+                background: "var(--primary)",
+                borderRadius: "3px 3px 0 0",
+              }} />
+            )}
+          </button>
+          <button
+            onClick={() => setActiveTab("subscriptions")}
+            style={{
+              flex: 1,
+              padding: "12px 6px",
+              background: "none",
+              border: "none",
+              color: activeTab === "subscriptions" ? "var(--primary)" : "var(--text-tertiary)",
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: "pointer",
+              transition: "all 0.2s ease",
+              position: "relative",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 5,
+            }}
+          >
+            <i className="fas fa-server"></i>
+            Subscriptions
+            {activeTab === "subscriptions" && (
+              <div style={{
+                position: "absolute",
+                bottom: 0,
+                left: "15%",
+                right: "15%",
+                height: 3,
+                background: "var(--primary)",
+                borderRadius: "3px 3px 0 0",
+              }} />
+            )}
+          </button>
+        </div>
+
+        {activeTab === "accounts" ? (
         <div className="content-scroll">
           <div className="invite-card">
             <div className="invite-title"><i className="fas fa-link"></i> Invite New Admin</div>
@@ -388,6 +564,11 @@ export default function AdminAccountsPage() {
             ))
           )}
         </div>
+        ) : (
+          <div className="content-scroll">
+            <SubscriptionsTab />
+          </div>
+        )}
       </div>
 
       <AdminBottomNav />

@@ -1,6 +1,6 @@
 {
-  "appId": "com.christianrevival.church",
-  "appName": "CHRISTIAN REVIVAL CHURCH",
+  "appId": "com.mountainofdeliverance.church",
+  "appName": "MOUNTAIN OF DELIVERANCE CHURCH",
   "webDir": "out",
   "plugins": {
     "SplashScreen": {
@@ -25,6 +25,9 @@
     "LocalNotifications": {
       "smallIcon": "ic_stat_icon",
       "iconColor": "#E8A838"
+    },
+    "CapacitorHttp": {
+      "enabled": true
     }
   }
 }

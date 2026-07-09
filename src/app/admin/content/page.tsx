@@ -5,7 +5,7 @@ import AdminBottomNav from "@/components/admin/AdminBottomNav";
 import ToastBridge from "@/components/dashboard/ToastBridge";
 import { apiFetch } from "@/lib/api";
 import { hapticSuccess } from "@/lib/haptics";
-import { formatBytes } from "@/lib/bunny";
+import { formatBytes, uploadFile } from "@/lib/bunny";
 import {
   getGalleryPhotos, addGalleryPhoto, updateGalleryPhoto, deleteGalleryPhoto,
 } from "@/lib/content";
@@ -19,7 +19,7 @@ import type { AlbumEntry } from "@/lib/albumEntries";
 import { Timestamp } from "firebase/firestore";
 import PremiumTopBar from "@/components/shared/PremiumTopBar";
 
-const churchId = process.env.NEXT_PUBLIC_CHURCH_ID || "christian_revival_church";
+const churchId = process.env.NEXT_PUBLIC_CHURCH_ID || "mountain_of_deliverance";
 const categories = ["all", "events", "services", "community", "leadership", "facility"];
 const defaultAlbumTitles: Record<string, string> = {
   events: "Church Events",
@@ -319,17 +319,8 @@ export default function AdminContentPage() {
       let imageUrl = eventImagePreview || "";
       if (eventImageFile) {
         setEventImageUploading(true);
-        const fd = new FormData();
-        fd.append("file", eventImageFile);
-        fd.append("church_id", churchId);
-        fd.append("category", "gallery");
-        const res = await apiFetch("/api/content/upload", { method: "POST", body: fd });
-        if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.error || "Image upload failed");
-        }
-        const result = await res.json();
-        imageUrl = result.cdn_url;
+        const result = await uploadFile(eventImageFile, churchId, "gallery");
+        imageUrl = result.cdnUrl;
         setEventImageUploading(false);
       }
       const data: Omit<EventItem, "id"> = {
@@ -526,17 +517,8 @@ export default function AdminContentPage() {
       let coverUrl = entryCoverUrl || "";
       if (entryCoverFile) {
         setEntryCoverUploading(true);
-        const fd = new FormData();
-        fd.append("file", entryCoverFile);
-        fd.append("church_id", churchId);
-        fd.append("category", "gallery");
-        const res = await apiFetch("/api/content/upload", { method: "POST", body: fd });
-        if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.error || "Cover upload failed");
-        }
-        const result = await res.json();
-        coverUrl = result.cdn_url;
+        const result = await uploadFile(entryCoverFile, churchId, "gallery");
+        coverUrl = result.cdnUrl;
         setEntryCoverUploading(false);
       }
       const data = {
@@ -620,27 +602,18 @@ export default function AdminContentPage() {
   }
 
   async function uploadSingleFile(file: File, title: string, category: string): Promise<void> {
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("church_id", churchId);
-    formData.append("category", "gallery");
-    const res = await apiFetch("/api/content/upload", { method: "POST", body: formData });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || "Upload failed");
-    }
-    const result = await res.json();
+    const result = await uploadFile(file, churchId, category);
     await addGalleryPhoto({
       title,
       description: "",
       category,
-      cdnUrl: result.cdn_url,
-      fileSize: result.file_size,
+      cdnUrl: result.cdnUrl,
+      fileSize: result.fileSize,
       width: result.width,
       height: result.height,
       isFeatured: false,
       altText: title,
-      storagePath: result.storage_path,
+      storagePath: result.storagePath,
       albumId: selectedAlbum?.id || undefined,
       entryId: selectedEntry?.id || undefined,
     });

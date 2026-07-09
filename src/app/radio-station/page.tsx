@@ -486,7 +486,7 @@ export default function RadioStationPage() {
           <style>{`@media(max-width:768px){#rsMobileMenuBtn{display:flex!important;}}`}</style>
           <div className="rs-header-logo"><i className="fas fa-tower-broadcast"></i></div>
           <div className="rs-header-info">
-            <div className="rs-header-name">CHRISTIAN REVIVAL CHURCH Radio</div>
+            <div className="rs-header-name">MOUNTAIN OF DELIVERANCE CHURCH Radio</div>
           </div>
           <div className="rs-header-right">
             {activeDJ && <div className="rs-dj-name"><i className="fas fa-user"></i> {activeDJ}</div>}

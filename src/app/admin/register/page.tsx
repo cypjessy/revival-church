@@ -58,7 +58,7 @@ function RegisterForm() {
         email,
         display_name: name,
         photo_url: firebaseUser.photoURL || "",
-        church_id: process.env.NEXT_PUBLIC_CHURCH_ID || "christian_revival_church",
+        church_id: process.env.NEXT_PUBLIC_CHURCH_ID || "mountain_of_deliverance",
         role: "admin" as const,
         phone: "",
         is_verified: false,

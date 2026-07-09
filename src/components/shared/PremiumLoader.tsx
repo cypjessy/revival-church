@@ -85,7 +85,7 @@ export default function PremiumLoader() {
           <div className="pl-ring-inner"></div>
           <i className="fas fa-cross pl-icon"></i>
         </div>
-        <div className="pl-brand">CHRISTIAN REVIVAL CHURCH</div>
+        <div className="pl-brand">MOUNTAIN OF DELIVERANCE CHURCH</div>
         <div className="pl-dots">
           <div className="pl-dot"></div>
           <div className="pl-dot"></div>

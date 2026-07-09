@@ -75,7 +75,7 @@ export default function MiniPlayer() {
       <div className="mini-thumb"><i className="fas fa-music"></i></div>
       <div className="mini-info">
         <div className="mini-title">Amazing Grace</div>
-        <div className="mini-subtitle">Worship Team · CHRISTIAN REVIVAL CHURCH</div>
+        <div className="mini-subtitle">Worship Team · MOUNTAIN OF DELIVERANCE CHURCH</div>
       </div>
       <div className="mini-controls">
         <button className="mini-btn" ref={prevRef}><i className="fas fa-backward-step"></i></button>

@@ -54,7 +54,7 @@ export default function LoginForm() {
         return;
       }
 
-      const storedCreds = await NativeBiometric.getCredentials({ server: "christian-revival-church-auth" });
+      const storedCreds = await NativeBiometric.getCredentials({ server: "mountain-of-deliverance-auth" });
       if (!storedCreds?.username || !storedCreds?.password) {
         showToast("No Credentials", "Please sign in manually first to set up biometrics", "info");
         setHasBiometric(false);
@@ -62,7 +62,7 @@ export default function LoginForm() {
         return;
       }
 
-      await NativeBiometric.verifyIdentity({ reason: "Sign in to CHRISTIAN REVIVAL CHURCH", title: "Biometric Sign In" });
+      await NativeBiometric.verifyIdentity({ reason: "Sign in to MOUNTAIN OF DELIVERANCE CHURCH", title: "Biometric Sign In" });
 
       setIsLoading(true);
       const result = await signInWithEmailAndPassword(auth, storedCreds.username, storedCreds.password);
@@ -321,8 +321,16 @@ export default function LoginForm() {
             Create Account
           </a>
         </p>
-
-
+        <p style={{ marginTop: 16, fontSize: 12, color: "var(--text-tertiary)" }}>
+          First time setting up?{" "}
+          <a href="#" onClick={(e) => {
+            e.preventDefault();
+            document.getElementById("tempAdminModal")?.classList.add("active");
+            document.body.style.overflow = "hidden";
+          }}>
+            Register as Admin
+          </a>
+        </p>
       </div>
     </>
   );

@@ -44,7 +44,7 @@ function timeAgo(dateStr: string): string {
    ================================================================== */
 
 const church = {
-  name: "CHRISTIAN REVIVAL CHURCH",
+  name: "MOUNTAIN OF DELIVERANCE CHURCH",
   tagline: "Worship. Word. Community.",
   logoInitials: "TP",
 };
@@ -327,9 +327,9 @@ interface ScheduleSlot {
 
 function getFallbackSchedule(): ScheduleSlot[] {
   const h = new Date().getHours();
-  if (h < 9) return [{ time: "9:00 AM", label: "Sunday Worship Service", isNow: false, hasContent: true, stationName: "CHRISTIAN REVIVAL CHURCH Radio" }];
-  if (h < 12) return [{ time: "9:00 AM", label: "Sunday Worship Service", isNow: true, hasContent: true, stationName: "CHRISTIAN REVIVAL CHURCH Radio" }];
-  return [{ time: "9:00 AM", label: "Sunday Worship Service", isNow: false, hasContent: true, stationName: "CHRISTIAN REVIVAL CHURCH Radio" }];
+  if (h < 9) return [{ time: "9:00 AM", label: "Sunday Worship Service", isNow: false, hasContent: true, stationName: "MOUNTAIN OF DELIVERANCE CHURCH Radio" }];
+  if (h < 12) return [{ time: "9:00 AM", label: "Sunday Worship Service", isNow: true, hasContent: true, stationName: "MOUNTAIN OF DELIVERANCE CHURCH Radio" }];
+  return [{ time: "9:00 AM", label: "Sunday Worship Service", isNow: false, hasContent: true, stationName: "MOUNTAIN OF DELIVERANCE CHURCH Radio" }];
 }
 
 function parseTimeToMinutes(t: string): number {
@@ -524,8 +524,8 @@ export default function DashboardPage() {
   useEffect(() => {
     if (audio.isPlaying) {
       const np = npData?.nowPlaying;
-      const title = np?.song?.title || "CHRISTIAN REVIVAL CHURCH Radio";
-      const artist = np?.song?.artist || "CHRISTIAN REVIVAL CHURCH";
+      const title = np?.song?.title || "MOUNTAIN OF DELIVERANCE CHURCH Radio";
+      const artist = np?.song?.artist || "MOUNTAIN OF DELIVERANCE CHURCH";
       const albumArt = np?.song?.albumArt;
       audio.updateMediaSession(title, artist, albumArt);
     }
@@ -1250,7 +1250,7 @@ export default function DashboardPage() {
                 <div className="st-time">{slot.time}</div>
                 <div className="st-body">
                   <div className={`st-label${slot.isNow ? "" : " upcoming"}`}>{slot.label}</div>
-                  <div className="st-station"><i className="fas fa-radio"></i> {slot.stationName || "CHRISTIAN REVIVAL CHURCH Radio"}</div>
+                  <div className="st-station"><i className="fas fa-radio"></i> {slot.stationName || "MOUNTAIN OF DELIVERANCE CHURCH Radio"}</div>
                 </div>
                 {slot.isNow && <span className="st-now-badge">NOW</span>}
               </div>

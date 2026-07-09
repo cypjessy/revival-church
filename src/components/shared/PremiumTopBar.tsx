@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 
 interface PremiumTopBarProps {
-  /** Main title text (defaults to "CHRISTIAN REVIVAL CHURCH") */
+  /** Main title text (defaults to "MOUNTAIN OF DELIVERANCE CHURCH") */
   title?: string;
   /** Subtitle shown below the title */
   subtitle?: string;
@@ -153,7 +153,7 @@ export default function PremiumTopBar({
             )}
             <div className="ptb-info">
               <div className="ptb-title">
-                {title || "CHRISTIAN REVIVAL CHURCH"}
+                {title || "MOUNTAIN OF DELIVERANCE CHURCH"}
               </div>
               {subtitle && <div className="ptb-sub">{subtitle}</div>}
             </div>

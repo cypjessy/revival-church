@@ -17,5 +17,14 @@
       ]
     }
   ],
+  {
+    "collectionGroup": "subscription_payments",
+    "queryScope": "COLLECTION",
+    "fields": [
+      { "fieldPath": "status", "order": "ASCENDING" },
+      { "fieldPath": "paidAt", "order": "DESCENDING" }
+    ]
+  }
+  ],
   "fieldOverrides": []
 }

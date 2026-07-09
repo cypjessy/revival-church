@@ -57,7 +57,7 @@ export function usePushNotifications() {
 
         const unsubReceived = await PushNotifications.addListener("pushNotificationReceived", (notification) => {
           const data = notification.data as PushNotificationData;
-          const title = notification.title || data?.title || "CHRISTIAN REVIVAL CHURCH";
+          const title = notification.title || data?.title || "MOUNTAIN OF DELIVERANCE CHURCH";
           const body = notification.body || data?.body || "";
           window.dispatchEvent(
             new CustomEvent("show-toast", {

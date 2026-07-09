@@ -39,7 +39,7 @@ export default function AdminTopBar() {
       <div className="header-brand">
         <div className="header-logo"><i className="fas fa-cross"></i></div>
         <div className="header-text">
-          <h1>CHRISTIAN REVIVAL CHURCH</h1>
+          <h1>MOUNTAIN OF DELIVERANCE CHURCH</h1>
         </div>
       </div>
       <div className="header-actions">

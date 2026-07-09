@@ -40,7 +40,7 @@ export interface PlayControlsConfig {
 }
 
 const DEFAULT_CONFIG: PlayControlsConfig = {
-  streamUrl: "https://azuracast.histoview.co.ke/listen/christian_revival_church/radio.mp3",
+  streamUrl: "https://azuracast.histoview.co.ke/listen/mountain_of_delivarance_church/radio.mp3",
   stationId: "1",
   buttons: {
     admin: {

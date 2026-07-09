@@ -8,7 +8,7 @@ import {
 /** The shape stored in Firestore at `radioConfig/main`.
  *  Field names are kept descriptive and flat to make AI queries unambiguous. */
 export interface RadioConfigDoc {
-  /** Display name of the station, e.g. "CHRISTIAN REVIVAL CHURCH Radio" */
+  /** Display name of the station, e.g. "MOUNTAIN OF DELIVERANCE CHURCH Radio" */
   stationName: string;
   /** Short description/tagline */
   description: string;
@@ -56,10 +56,10 @@ export async function saveRadioConfig(
 /** Sensible defaults for the radio config. */
 export function defaultRadioConfig(): Omit<RadioConfigDoc, "updatedAt" | "updatedBy"> {
   return {
-    stationName: "CHRISTIAN REVIVAL CHURCH Radio",
-    description: "CHRISTIAN REVIVAL CHURCH Radio Station",
+    stationName: "MOUNTAIN OF DELIVERANCE CHURCH Radio",
+    description: "MOUNTAIN OF DELIVERANCE CHURCH Radio Station",
     stationId: "4",
-    embedUrl: "https://azuracast.histoview.co.ke/public/christian_revival_church/embed?autoplay=1&rounded=1&allow_popup=1&continuous=1",
+    embedUrl: "https://azuracast.histoview.co.ke/public/mountain_of_delivarance_church/embed?autoplay=1&rounded=1&allow_popup=1&continuous=1",
     streamUrl: "",
   };
 }

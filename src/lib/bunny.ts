@@ -1,7 +1,18 @@
+// Server-side env vars (not available in client bundle)
 export const BUNNY_STORAGE_ZONE = process.env.BUNNY_STORAGE_ZONE || "histoview";
 export const BUNNY_STORAGE_HOST = process.env.BUNNY_STORAGE_HOST || "storage.bunnycdn.com";
 export const BUNNY_CDN_URL = process.env.BUNNY_CDN_URL || "https://histoview.b-cdn.net";
 export const BUNNY_API_KEY = process.env.BUNNY_STORAGE_API_KEY || "";
+
+// Client-side env vars (baked into JS bundle via NEXT_PUBLIC_ prefix)
+export const CLIENT_BUNNY_API_KEY =
+  process.env.NEXT_PUBLIC_BUNNY_STORAGE_API_KEY || "";
+export const CLIENT_BUNNY_STORAGE_ZONE =
+  process.env.NEXT_PUBLIC_BUNNY_STORAGE_ZONE || "histoview";
+export const CLIENT_BUNNY_STORAGE_HOST =
+  process.env.NEXT_PUBLIC_BUNNY_STORAGE_HOST || "storage.bunnycdn.com";
+export const CLIENT_BUNNY_CDN_URL =
+  process.env.NEXT_PUBLIC_BUNNY_CDN_URL || "https://histoview.b-cdn.net";
 
 export interface BunnyFileInfo {
   guid: string;
@@ -110,6 +121,92 @@ export async function purgeBunnyCache(url?: string): Promise<boolean> {
     },
   });
   return res.ok;
+}
+
+/**
+ * Upload a file directly to BunnyCDN from the client side.
+ * Uses Capacitor's native HTTP plugin on Android (bypasses CORS)
+ * Falls back to regular fetch on web (will fail due to CORS on direct BunnyCDN API — use Vercel proxy instead).
+ */
+export async function uploadToBunnyClient(
+  file: File,
+  churchId: string,
+  category: string = "gallery"
+): Promise<{ cdnUrl: string; fileSize: number; storagePath: string; width: number; height: number }> {
+  const ext = file.name.split(".").pop() || "jpg";
+  const uuid = crypto.randomUUID();
+  const storagePath = `churches/${churchId}/${category}/${uuid}.${ext}`;
+  const url = `https://${CLIENT_BUNNY_STORAGE_HOST}/${CLIENT_BUNNY_STORAGE_ZONE}/${storagePath}`;
+  const headers = {
+    AccessKey: CLIENT_BUNNY_API_KEY,
+    "Content-Type": file.type || "application/octet-stream",
+  };
+  const buffer = await file.arrayBuffer();
+
+  // Use CapacitorHttp (bypasses CORS on Android native)
+  const { CapacitorHttp } = await import("@capacitor/core");
+  const response = await CapacitorHttp.put({
+    url,
+    headers,
+    data: buffer, // CapacitorHttp supports ArrayBuffer natively
+  });
+  if (response.status >= 400) {
+    const errMsg = typeof response.data === "string" ? response.data : JSON.stringify(response.data);
+    throw new Error(`BunnyCDN upload failed (${response.status}): ${errMsg}`);
+  }
+
+  // Detect dimensions client-side (best-effort)
+  let width = 0;
+  let height = 0;
+  try {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => { width = img.naturalWidth; height = img.naturalHeight; URL.revokeObjectURL(url); resolve(); };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(); };
+      img.src = url;
+    });
+  } catch {
+    // Non-fatal — dimensions default to 0
+  }
+
+  return {
+    cdnUrl: `${CLIENT_BUNNY_CDN_URL}/${storagePath}`,
+    fileSize: file.size,
+    storagePath,
+    width,
+    height,
+  };
+}
+
+/**
+ * Shared upload helper that routes to the right upload method based on platform.
+ * - On Capacitor (Android APK): uploads directly to BunnyCDN via native HTTP
+ * - On web: goes through Vercel proxy
+ */
+export async function uploadFile(
+  file: File,
+  churchId: string,
+  category: string = "gallery"
+): Promise<{ cdnUrl: string; fileSize: number; storagePath: string; width: number; height: number }> {
+  const isCapacitor = typeof window !== "undefined" && !!(window as any).Capacitor?.isNative;
+
+  if (isCapacitor) {
+    return uploadToBunnyClient(file, churchId, category);
+  }
+
+  // Web: go through Vercel proxy using apiFetch for proper routing
+  const { apiFetch } = await import("@/lib/api");
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("church_id", churchId);
+  formData.append("category", category);
+  const res = await apiFetch("/api/content/upload", { method: "POST", body: formData });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Upload failed");
+  }
+  return res.json();
 }
 
 /**

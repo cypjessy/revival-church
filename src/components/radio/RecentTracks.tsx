@@ -42,7 +42,7 @@ export default function RecentTracks() {
           <div className="track-thumb"><AlbumArt className="track-thumb-img" size={40} fallbackIcon="fa-music" /></div>
           <div className="track-details">
             <div className="track-name">Amazing Grace</div>
-            <div className="track-artist">Worship Team · CHRISTIAN REVIVAL CHURCH</div>
+            <div className="track-artist">Worship Team · MOUNTAIN OF DELIVERANCE CHURCH</div>
           </div>
           <span className="track-duration">4:32</span>
           <button className="track-menu"><i className="fas fa-ellipsis-vertical"></i></button>
