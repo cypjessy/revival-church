@@ -597,6 +597,59 @@ export async function updateTvHeartbeat(uid: string): Promise<void> {
  * Count active viewers — users with a heartbeat within the last 3 minutes.
  * We read all docs and filter client-side (small collection).
  */
+/* ─── LIVE STREAM STATUS (manual toggle by media team) ───── */
+
+export interface LiveStatus {
+  isLive: boolean;
+  liveVideoId: string | null;
+  liveTitle: string | null;
+  startedBy: string | null;
+  startedAt: Date | null;
+}
+
+const LIVE_STATUS_DOC = "tv_live_status/main";
+
+/** Get the current live stream status. */
+export async function getLiveStatus(): Promise<LiveStatus | null> {
+  const snap = await getDoc(doc(db, LIVE_STATUS_DOC));
+  if (!snap.exists()) return null;
+  const data = snap.data();
+  return {
+    isLive: data.isLive || false,
+    liveVideoId: data.liveVideoId || null,
+    liveTitle: data.liveTitle || null,
+    startedBy: data.startedBy || null,
+    startedAt: data.startedAt?.toDate?.() || null,
+  } as LiveStatus;
+}
+
+/** Set the live stream (media team clicks "Go Live"). */
+export async function setLiveStream(
+  liveVideoId: string,
+  liveTitle: string,
+  startedBy: string,
+): Promise<void> {
+  await setDoc(doc(db, LIVE_STATUS_DOC), {
+    isLive: true,
+    liveVideoId,
+    liveTitle,
+    startedBy,
+    startedAt: serverTimestamp(),
+  });
+}
+
+/** End the live stream (media team clicks "End Live"). */
+export async function endLiveStream(): Promise<void> {
+  await setDoc(doc(db, LIVE_STATUS_DOC), {
+    isLive: false,
+    liveVideoId: null,
+    liveTitle: null,
+    startedAt: null,
+  });
+}
+
+/* ─── TV Active Viewers (heartbeat) ───────────────────────── */
+
 export async function countActiveViewers(): Promise<number> {
   const snap = await getDocs(collection(db, ACTIVE_VIEWERS_COL));
   const threeMinAgo = Date.now() - 180000;

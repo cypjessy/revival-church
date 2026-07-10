@@ -106,6 +106,9 @@ export default function TVPage() {
     tvPlayer.registerTarget(el);
   }, [tvPlayer.registerTarget]);
 
+  // ─── Live stream mode (from global TvPlayerProvider, auto-detected) ───
+  const liveStatus = tvPlayer.liveStatus;
+
   // ─── Current playing video ───
   const currentVideo = tvUserState && tvUserState.playlist.length > 0
     ? videos.find((v) => v.id === tvUserState.playlist[tvUserState.currentIndex])

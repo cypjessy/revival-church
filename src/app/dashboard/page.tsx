@@ -480,14 +480,16 @@ export default function DashboardPage() {
 
   // Call play() when current video changes to a different one.
   // Does NOT watch seek — avoids re-firing when tvUserState updates.
+  // Guards against overriding an active live stream.
   useEffect(() => {
+    if (tvPlayer.isLive) return;
     if (tvCurrentVideo) {
       if (tvPlayer.currentVideoId === tvCurrentVideo.id && tvPlayer.visible) return;
       tvPlayer.play(tvCurrentVideo.id, tvUserState?.currentSeek || 0);
     } else {
       tvPlayer.hide();
     }
-  }, [tvCurrentVideo?.id, tvPlayer]);
+  }, [tvCurrentVideo?.id, tvPlayer, tvPlayer.isLive]);
 
   // Delay full content render to prevent ANR on Android WebView
   useEffect(() => {
@@ -911,6 +913,27 @@ export default function DashboardPage() {
             </div>
           </div>              <button className="live-banner-btn" onClick={() => { setIsPlaying(true); router.push("/radio"); }}>
             <i className="fas fa-play"></i> Tune In Now
+          </button>
+        </div>
+      )}
+
+      {/* ===== TV LIVE STREAM BANNER ===== */}
+      {tvPlayer.isLive && tvPlayer.liveStatus?.liveVideoId && (
+        <div className="live-banner" style={{ borderTop: "1px solid rgba(239,68,68,0.1)" }}>
+          <div className="live-banner-left">
+            <div className="live-banner-dot"></div>
+            <div className="live-banner-info">
+              <div className="live-banner-title" style={{ color: "#EF4444" }}>
+                <i className="fab fa-youtube" style={{ marginRight: 4 }}></i>
+                {tvPlayer.liveStatus.liveTitle || "Live Stream"}
+              </div>
+              <div className="live-banner-sub">
+                Church TV · Watch the live broadcast now
+              </div>
+            </div>
+          </div>
+          <button className="live-banner-btn" onClick={() => tvPlayer.play(tvPlayer.liveStatus!.liveVideoId!)}>
+            <i className="fas fa-play"></i> Watch Live
           </button>
         </div>
       )}

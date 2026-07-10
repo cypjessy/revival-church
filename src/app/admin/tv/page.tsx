@@ -10,7 +10,9 @@ import {
   getGivingConfig, saveGivingConfig,
   replyToPrayer,
   getUserTvState, updateUserTvProgress, autoInitUserPlaylist,
+  getLiveStatus, setLiveStream, endLiveStream,
 } from "@/lib/youtube";
+import type { LiveStatus } from "@/lib/youtube";
 import type { YouTubeChannel, YouTubeVideo, TVPlaylist, TVGivingConfig } from "@/lib/youtube";
 import {
   getPaymentMethods, addPaymentMethod, updatePaymentMethod, deletePaymentMethod,
@@ -535,6 +537,65 @@ export default function AdminTVPage() {
     getTodayBroadcast().then((b) => {
       if (b) setBroadcastSlotCount(b.slots.length);
     });
+  }, []);
+
+  // ─── Live stream state ───
+  const [liveStatus, setLiveStatus] = useState<LiveStatus | null>(null);
+  const [liveUrlInput, setLiveUrlInput] = useState("");
+  const [liveTitleInput, setLiveTitleInput] = useState("");
+  const [liveSaving, setLiveSaving] = useState(false);
+
+  // Load live status on mount
+  useEffect(() => {
+    getLiveStatus().then(setLiveStatus);
+  }, []);
+
+  // Real-time listener for live status changes
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "tv_live_status", "main"), (snap: any) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        setLiveStatus({
+          isLive: data.isLive || false,
+          liveVideoId: data.liveVideoId || null,
+          liveTitle: data.liveTitle || null,
+          startedBy: data.startedBy || null,
+          startedAt: data.startedAt?.toDate?.() || null,
+        } as LiveStatus);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // Handle Go Live
+  const handleGoLive = useCallback(async () => {
+    const id = extractYouTubeId(liveUrlInput);
+    if (!id) {
+      showToast("Invalid Link", "Enter a valid YouTube URL or video ID", "error", 3000);
+      return;
+    }
+    setLiveSaving(true);
+    try {
+      await setLiveStream(id, liveTitleInput.trim() || "Live Stream", auth.currentUser?.uid || "admin");
+      showToast("Live!", "Live stream started for all members", "success", 3000);
+    } catch {
+      showToast("Error", "Could not start live stream", "error", 3000);
+    }
+    setLiveSaving(false);
+  }, [liveUrlInput, liveTitleInput]);
+
+  // Handle End Live
+  const handleEndLive = useCallback(async () => {
+    setLiveSaving(true);
+    try {
+      await endLiveStream();
+      showToast("Ended", "Live stream ended. Members returned to playlist.", "success", 3000);
+      setLiveUrlInput("");
+      setLiveTitleInput("");
+    } catch {
+      showToast("Error", "Could not end live stream", "error", 3000);
+    }
+    setLiveSaving(false);
   }, []);
 
   // ─── YouTube URL parser ───
@@ -1191,8 +1252,9 @@ export default function AdminTVPage() {
           <i className="fas fa-hand-holding-heart"></i> Giving
           {txStats.pending > 0 && <span className="live-sub-badge">{txStats.pending}</span>}
         </button>
-        <button className={`live-sub-tab${liveSubTab === "broadcast" ? " active" : ""}`} onClick={() => setLiveSubTab("broadcast")}>
+        <button className={`live-sub-tab${liveSubTab === "broadcast" ? " active" : ""} ${liveStatus?.isLive ? "live-active" : ""}`} onClick={() => setLiveSubTab("broadcast")}>
           <i className="fas fa-tower-broadcast"></i> Broadcast
+          {liveStatus?.isLive && <span className="live-sub-badge" style={{ background: "rgba(239,68,68,0.2)", color: "#EF4444" }}>LIVE</span>}
         </button>
       </div>
 
@@ -1365,12 +1427,167 @@ export default function AdminTVPage() {
         <>
           <div className="section-title" style={{ marginBottom: 12 }}>
             <i className="fas fa-tower-broadcast"></i>
-            Broadcast Controls — Coming Soon
+            Live Stream Control
+            {liveStatus?.isLive && (
+              <span style={{
+                marginLeft: 8, padding: "2px 10px", borderRadius: 6,
+                background: "rgba(239,68,68,0.15)", color: "#EF4444",
+                fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", gap: 4,
+              }}>
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#EF4444", animation: "livePulse 1.2s ease-in-out infinite" }}></span>
+                LIVE
+              </span>
+            )}
           </div>
-          <div className="live-empty">
-            <i className="fas fa-tower-broadcast"></i>
-            <span>Live broadcast controls have been removed. Members will watch from their playlist.</span>
-          </div>
+
+          {/* Current status */}
+          {liveStatus?.isLive ? (
+            <div className="live-broadcast-status">
+              <div className="live-broadcast-header">
+                <i className="fas fa-circle" style={{ color: "#EF4444", fontSize: 10, animation: "livePulse 1.2s ease-in-out infinite" }}></i>
+                <span style={{ fontWeight: 700 }}>Currently Live</span>
+              </div>
+              <div className="live-broadcast-info">
+                <div className="live-broadcast-label">Video</div>
+                <div className="live-broadcast-value">{liveStatus.liveVideoId}</div>
+              </div>
+              <div className="live-broadcast-info">
+                <div className="live-broadcast-label">Title</div>
+                <div className="live-broadcast-value">{liveStatus.liveTitle || "Live Stream"}</div>
+              </div>
+              <div className="live-broadcast-embed-preview">
+                <iframe
+                  src={`https://www.youtube.com/embed/${liveStatus.liveVideoId}?autoplay=1&mute=1`}
+                  style={{
+                    width: "100%", aspectRatio: "16/9", borderRadius: 10,
+                    border: "1px solid var(--border)", background: "#000",
+                  }}
+                  allow="autoplay; encrypted-media"
+                  allowFullScreen
+                />
+              </div>
+              <button
+                className="btn-primary"
+                onClick={handleEndLive}
+                disabled={liveSaving}
+                style={{ background: "linear-gradient(135deg, #EF4444, #DC2626)" }}
+              >
+                {liveSaving ? (
+                  <><span className="spinner"></span> Ending...</>
+                ) : (
+                  <><i className="fas fa-square"></i> End Live Stream</>
+                )}
+              </button>
+            </div>
+          ) : (
+            <div className="live-broadcast-form">
+              <div className="form-group">
+                <label className="form-label">
+                  <i className="fab fa-youtube"></i>
+                  YouTube Video ID or URL
+                </label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="https://youtube.com/watch?v=... or video ID"
+                  value={liveUrlInput}
+                  onChange={(e) => setLiveUrlInput(e.target.value)}
+                />
+                <span className="form-hint">
+                  <i className="fas fa-circle-info"></i>
+                  Paste the YouTube live stream link or ID to broadcast to all members
+                </span>
+              </div>
+              <div className="form-group">
+                <label className="form-label">
+                  <i className="fas fa-heading"></i>
+                  Stream Title (optional)
+                </label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="e.g. Sunday Morning Service"
+                  value={liveTitleInput}
+                  onChange={(e) => setLiveTitleInput(e.target.value)}
+                />
+              </div>
+              <button
+                className="btn-primary"
+                onClick={handleGoLive}
+                disabled={liveSaving || !liveUrlInput.trim()}
+                style={{
+                  background: liveUrlInput.trim()
+                    ? "linear-gradient(135deg, #EF4444, #DC2626)"
+                    : undefined,
+                }}
+              >
+                {liveSaving ? (
+                  <><span className="spinner"></span> Starting...</>
+                ) : (
+                  <><i className="fas fa-circle"></i> Go Live</>
+                )}
+              </button>
+            </div>
+          )}
+
+          <style>{`
+            @keyframes livePulse {
+              0%, 100% { opacity: 1; transform: scale(1); }
+              50% { opacity: 0.4; transform: scale(1.5); }
+            }
+            .live-sub-tab.live-active {
+              color: #EF4444 !important;
+            }
+            .live-sub-tab.live-active i {
+              color: #EF4444 !important;
+            }
+            .live-broadcast-status {
+              display: flex;
+              flex-direction: column;
+              gap: 12px;
+            }
+            .live-broadcast-header {
+              display: flex;
+              align-items: center;
+              gap: 8px;
+              padding: 12px 16px;
+              background: rgba(239,68,68,0.08);
+              border: 1px solid rgba(239,68,68,0.15);
+              border-radius: 12px;
+              font-size: 14px;
+            }
+            .live-broadcast-info {
+              display: flex;
+              align-items: center;
+              gap: 8px;
+              padding: 8px 12px;
+              background: var(--surface);
+              border: 1px solid var(--border);
+              border-radius: 10px;
+            }
+            .live-broadcast-label {
+              font-size: 11px;
+              font-weight: 700;
+              color: var(--text-tertiary);
+              text-transform: uppercase;
+              letter-spacing: 0.5px;
+              min-width: 50px;
+            }
+            .live-broadcast-value {
+              font-size: 13px;
+              font-weight: 600;
+              color: var(--text-primary);
+              word-break: break-all;
+            }
+            .live-broadcast-embed-preview {
+              width: 100%;
+            }
+            .live-broadcast-form {
+              display: flex;
+              flex-direction: column;
+              gap: 12px;
+            }
+          `}</style>
         </>
       )}
 

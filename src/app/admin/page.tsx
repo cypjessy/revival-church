@@ -138,11 +138,13 @@ export default function AdminPage() {
 
   // Play current video when it changes to a different one (initial mount, advancement, page switches).
   // Does NOT watch seek — avoids re-firing when saveTvProgress updates state.
+  // Guards against overriding an active live stream.
   useEffect(() => {
+    if (tvPlayer.isLive) return;
     if (tvCurrentVideo && tvPlayer.currentVideoId !== tvCurrentVideo.id) {
       tvPlayer.play(tvCurrentVideo.id, tvUserState?.currentSeek || 0);
     }
-  }, [tvCurrentVideo?.id, tvPlayer]);
+  }, [tvCurrentVideo?.id, tvPlayer, tvPlayer.isLive]);
 
   // Track current seek and index via refs for periodic Firestore saves
   const handleTvTimeUpdate = useCallback((time: number) => {
@@ -1723,6 +1725,27 @@ export default function AdminPage() {
 
         {/* CONTENT SCROLL */}
         <div className="content-scroll">
+
+          {/* ─── TV LIVE STREAM BANNER ─── */}
+          {tvPlayer.isLive && tvPlayer.liveStatus?.liveVideoId && (
+            <div className="live-banner" style={{ borderTop: "1px solid rgba(239,68,68,0.1)", borderBottom: "1px solid rgba(239,68,68,0.1)" }}>
+              <div className="live-banner-left">
+                <div className="live-banner-dot"></div>
+                <div className="live-banner-info">
+                  <div className="live-banner-title" style={{ color: "#EF4444" }}>
+                    <i className="fab fa-youtube" style={{ marginRight: 4 }}></i>
+                    {tvPlayer.liveStatus.liveTitle || "Live Stream"}
+                  </div>
+                  <div className="live-banner-sub">
+                    Church TV · Watch the live broadcast now
+                  </div>
+                </div>
+              </div>
+              <button className="live-banner-btn" onClick={() => tvPlayer.play(tvPlayer.liveStatus!.liveVideoId!)}>
+                <i className="fas fa-play"></i> Watch Live
+              </button>
+            </div>
+          )}
 
           {/* ─── TV HERO CARD ─── */}
           <section className="feed-section">
