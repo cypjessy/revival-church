@@ -49,8 +49,8 @@ export function AudioProvider({ children }: { children: ReactNode }) {
       if (!("mediaSession" in navigator)) return;
 
       navigator.mediaSession.metadata = new MediaMetadata({
-        title: title || "MOUNTAIN OF DELIVERANCE CHURCH Radio",
-        artist: artist || "MOUNTAIN OF DELIVERANCE CHURCH",
+        title: title || "CHRISTIAN REVIVAL CHURCH Radio",
+        artist: artist || "CHRISTIAN REVIVAL CHURCH",
         album: "Radio Stream",
         artwork: albumArt
           ? [

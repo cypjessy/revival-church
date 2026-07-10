@@ -19,7 +19,7 @@ export default function RadioPage() {
   const [streamers, setStreamers] = useState<Streamer[]>([]);
   const [radioLoading, setRadioLoading] = useState(true);
 
-  const stationName = settings?.name || "MOUNTAIN OF DELIVERANCE CHURCH Radio";
+  const stationName = settings?.name || "CHRISTIAN REVIVAL CHURCH Radio";
 
   /* Poll AzuraCast now playing + history every 10 seconds */
   useEffect(() => {
@@ -329,7 +329,7 @@ export default function RadioPage() {
         <header className="header">
           <button className="header-back" onClick={() => window.history.back()}><i className="fas fa-arrow-left"></i></button>
           <div className="header-info">
-            <div className="header-name">MOUNTAIN OF DELIVERANCE CHURCH</div>
+            <div className="header-name">CHRISTIAN REVIVAL CHURCH</div>
             <div className="header-dj">
               <i className="fas fa-tower-cell"></i> {stationName}
             </div>

@@ -8,13 +8,13 @@ import { RootErrorBoundary } from "@/components/shared/RootErrorBoundary";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "MOUNTAIN OF DELIVERANCE CHURCH",
+  title: "CHRISTIAN REVIVAL CHURCH",
   description:
-    "MOUNTAIN OF DELIVERANCE CHURCH connects you to live radio, sermons, videos, and community — anywhere, anytime.",
+    "CHRISTIAN REVIVAL CHURCH connects you to live radio, sermons, videos, and community — anywhere, anytime.",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "MOUNTAIN OF DELIVERANCE CHURCH",
+    title: "CHRISTIAN REVIVAL CHURCH",
   },
   icons: {
     icon: "/favicon.ico",

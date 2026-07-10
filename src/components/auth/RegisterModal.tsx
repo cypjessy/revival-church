@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import { auth, db } from "@/lib/firebase";
 import { useAppStore } from "@/lib/useAppStore";
 
-const CHURCH_ID = process.env.NEXT_PUBLIC_CHURCH_ID || "mountain_of_deliverance";
+const CHURCH_ID = process.env.NEXT_PUBLIC_CHURCH_ID || "christian_revival_church";
 
 export default function RegisterModal() {
   const router = useRouter();
@@ -77,7 +77,7 @@ export default function RegisterModal() {
       }
 
       closeModal();
-      showToast("Account Created!", `Welcome to MOUNTAIN OF DELIVERANCE CHURCH, ${name}! Check your email to verify your account.`, "success", 4000);
+      showToast("Account Created!", `Welcome to CHRISTIAN REVIVAL CHURCH, ${name}! Check your email to verify your account.`, "success", 4000);
       setTimeout(() => router.push("/dashboard"), 800);
     } catch (err: unknown) {
       const e = err as { code?: string; message?: string };
