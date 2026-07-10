@@ -18,7 +18,7 @@ const ALLOWED_ORIGINS = [
  * Vercel-hosted API are cross-origin. Without proper CORS headers the
  * browser blocks the request before it reaches the API route.
  */
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const origin = request.headers.get("origin") || "";
   const isApiRoute = request.nextUrl.pathname.startsWith("/api/");
 

@@ -44,9 +44,9 @@ function timeAgo(dateStr: string): string {
    ================================================================== */
 
 const church = {
-  name: "MOUNTAIN OF DELIVERANCE CHURCH",
+  name: "CHRISTIAN REVIVAL CHURCH",
   tagline: "Worship. Word. Community.",
-  logoInitials: "TP",
+  logoInitials: "CRC",
 };
 
 const memberName = "Derick";
@@ -327,9 +327,9 @@ interface ScheduleSlot {
 
 function getFallbackSchedule(): ScheduleSlot[] {
   const h = new Date().getHours();
-  if (h < 9) return [{ time: "9:00 AM", label: "Sunday Worship Service", isNow: false, hasContent: true, stationName: "MOUNTAIN OF DELIVERANCE CHURCH Radio" }];
-  if (h < 12) return [{ time: "9:00 AM", label: "Sunday Worship Service", isNow: true, hasContent: true, stationName: "MOUNTAIN OF DELIVERANCE CHURCH Radio" }];
-  return [{ time: "9:00 AM", label: "Sunday Worship Service", isNow: false, hasContent: true, stationName: "MOUNTAIN OF DELIVERANCE CHURCH Radio" }];
+  if (h < 9) return [{ time: "9:00 AM", label: "Sunday Worship Service", isNow: false, hasContent: true,          stationName: "CHRISTIAN REVIVAL CHURCH Radio" }];
+  if (h < 12) return [{ time: "9:00 AM", label: "Sunday Worship Service", isNow: true, hasContent: true, stationName: "CHRISTIAN REVIVAL CHURCH Radio" }];
+  return [{ time: "9:00 AM", label: "Sunday Worship Service", isNow: false, hasContent: true, stationName: "CHRISTIAN REVIVAL CHURCH Radio" }];
 }
 
 function parseTimeToMinutes(t: string): number {
@@ -445,17 +445,13 @@ export default function DashboardPage() {
   const [tvStartCountdown, setTvStartCountdown] = useState(20);
   const lastTvSeekRef = useRef(0);
   const lastTvIndexRef = useRef(0);
-  const tvPlayerTargetRef = useRef<HTMLDivElement>(null);
   const tvPlayer = useTvPlayer();
   const { toggleFullscreen } = useFullscreenToggle();
-  const hasInteractedWithTv = useRef(false);
 
   // Derive current video from user's playlist
   const tvCurrentVideo = tvUserState && tvUserState.playlist.length > 0
     ? tvVideos.find((v) => v.id === tvUserState.playlist[tvUserState.currentIndex]) ?? null
     : null;
-  // Resume from Firestore seek position (0 if none)
-  const tvInitialSeek = tvUserState?.currentSeek ?? undefined;
 
   // Sync index ref when state changes
   useEffect(() => {
@@ -476,26 +472,22 @@ export default function DashboardPage() {
     return () => clearInterval(t);
   }, []);
 
-  // Register portal target for the global player overlay
-  useEffect(() => {
-    if (tvPlayerTargetRef.current) {
-      tvPlayer.registerTarget(tvPlayerTargetRef.current);
-    }
-    return () => {
-      tvPlayer.registerTarget(null);
-    };
-  }, [tvCurrentVideo, tvPlayer]);
+  // Register portal target via callback ref — fires on mount/unmount regardless
+  // of conditional rendering timing.
+  const tvPlayerTargetRef = useCallback((el: HTMLDivElement | null) => {
+    tvPlayer.registerTarget(el);
+  }, [tvPlayer.registerTarget]);
 
-  // Call play() when current video changes — skip if global player already on this video
-  // (prevents stale Firestore seek from rewinding on Android page navigation).
+  // Call play() when current video changes to a different one.
+  // Does NOT watch seek — avoids re-firing when tvUserState updates.
   useEffect(() => {
     if (tvCurrentVideo) {
       if (tvPlayer.currentVideoId === tvCurrentVideo.id && tvPlayer.visible) return;
-      tvPlayer.play(tvCurrentVideo.id, tvInitialSeek);
+      tvPlayer.play(tvCurrentVideo.id, tvUserState?.currentSeek || 0);
     } else {
       tvPlayer.hide();
     }
-  }, [tvCurrentVideo?.id, tvInitialSeek, tvPlayer]);
+  }, [tvCurrentVideo?.id, tvPlayer]);
 
   // Delay full content render to prevent ANR on Android WebView
   useEffect(() => {
@@ -507,9 +499,6 @@ export default function DashboardPage() {
   const audio = useAudio();
   const { config: playConfig } = usePlayConfig();
 
-  // Music controls plugin disabled due to native crash on Android
-  // const musicControls = useMusicControls({...});
-
   const contentRef = useRef<HTMLDivElement>(null);
   const [offline, setOffline] = useState(false);
 
@@ -520,12 +509,12 @@ export default function DashboardPage() {
     queueMicrotask(() => setIsPlaying(nowPlaying));
   }, [audio.isPlaying, audio.currentStationId, npData]);
 
-  // Push now-playing metadata to Android media notification when audio is playing
+  // Sync Android notification with now-playing metadata (keeps audio alive in background)
   useEffect(() => {
     if (audio.isPlaying) {
       const np = npData?.nowPlaying;
-      const title = np?.song?.title || "MOUNTAIN OF DELIVERANCE CHURCH Radio";
-      const artist = np?.song?.artist || "MOUNTAIN OF DELIVERANCE CHURCH";
+      const title = np?.song?.title || "CHRISTIAN REVIVAL CHURCH Radio";
+      const artist = np?.song?.artist || "CHRISTIAN REVIVAL CHURCH";
       const albumArt = np?.song?.albumArt;
       audio.updateMediaSession(title, artist, albumArt);
     }
@@ -669,17 +658,18 @@ export default function DashboardPage() {
     return () => { mounted = false; };
   }, []);
 
-  /* Start TV — resume saved progress, or advance if already interacted */
-  const handleStartTv = useCallback(() => {
+  /* Start TV — always advances to the next video in the playlist.
+     If no playlist exists yet, auto-initialises one and plays the first video.
+     Progress is saved periodically by the 5s interval once the new video plays. */
+  const handleStartTv = useCallback(async () => {
     if (!tvUserState || tvUserState.playlist.length === 0) {
-      // No playlist — try to auto-populate
       const uid = auth.currentUser?.uid;
       if (uid && tvVideos.length > 0) {
-        import("@/lib/youtube").then((yt) => {
-          yt.autoInitUserPlaylist(uid).then((state) => {
-            setTvUserState(state);
-          });
-        });
+        const yt = await import("@/lib/youtube");
+        const state = await yt.autoInitUserPlaylist(uid);
+        setTvUserState(state);
+        const firstId = state.playlist[state.currentIndex];
+        if (firstId) tvPlayer.play(firstId, state.currentSeek || 0);
       } else {
         window.dispatchEvent(new CustomEvent("show-toast", {
           detail: { title: "No Videos", message: "No videos available to play. Sync videos from the admin panel.", type: "info", duration: 3000 }
@@ -687,47 +677,17 @@ export default function DashboardPage() {
       }
       return;
     }
+    setShowEndCard(false);
+    const nextIndex = (tvUserState.currentIndex + 1) % tvUserState.playlist.length;
+    const nextId = tvUserState.playlist[nextIndex];
     const uid = auth.currentUser?.uid;
-    // First click after page load = resume saved progress, subsequent clicks = advance
-    if (tvCurrentVideo && hasInteractedWithTv.current) {
-      // User already pressed Start TV before — advance to next video
-      const nextIndex = (tvUserState.currentIndex + 1) % tvUserState.playlist.length;
-      const next = tvVideos.find((v) => v.id === tvUserState.playlist[nextIndex]) ?? null;
-      if (next) setNextTvVideo(next);
-      if (uid) updateUserTvProgress(uid, nextIndex, 0);
-      setTvUserState((prev) => prev ? { ...prev, currentIndex: nextIndex, currentSeek: 0 } : prev);
-      return;
-    }
-    hasInteractedWithTv.current = true;
-    // Resume or start — check saved progress to decide
-    const savedIndex = tvUserState.currentIndex;
-    const savedSeek = tvUserState.currentSeek;
-    const savedVideo = tvVideos.find((v) => v.id === tvUserState.playlist[savedIndex]) ?? null;
-    const nearEnd = savedVideo && savedVideo.duration > 0 && savedSeek >= savedVideo.duration * 0.9;
-    if (nearEnd) {
-      // Near the end — advance to next video
-      const nextIndex = (savedIndex + 1) % tvUserState.playlist.length;
-      const next = tvVideos.find((v) => v.id === tvUserState.playlist[nextIndex]) ?? null;
-      if (next) setNextTvVideo(next);
-      if (uid) updateUserTvProgress(uid, nextIndex, 0);
-      setTvUserState((prev) => prev ? { ...prev, currentIndex: nextIndex, currentSeek: 0 } : prev);
-    } else {
-      // Resume current video at saved progress (or start from index 0 if no progress)
-      const resumeIndex = savedSeek > 0 && savedVideo ? savedIndex : 0;
-      const resumeSeek = resumeIndex === savedIndex ? savedSeek : 0;
-      if (tvUserState.playlist.length > 1) {
-        const nextIdx = (resumeIndex + 1) % tvUserState.playlist.length;
-        const next = tvVideos.find((v) => v.id === tvUserState.playlist[nextIdx]) ?? null;
-        if (next) setNextTvVideo(next);
-      }
-      console.log('[Dashboard Start TV] Resuming:', { resumeIndex, resumeSeek, videoTitle: savedVideo?.title });
-      // DON'T write to Firestore on resume - let the interval save actual progress
-      setTvUserState((prev) => prev ? { ...prev, currentIndex: resumeIndex, currentSeek: resumeSeek } : prev);
-      if (savedVideo) tvPlayer.play(savedVideo.id, resumeSeek);
-    }
-  }, [tvCurrentVideo, tvUserState, tvVideos, router, tvPlayer]);
+    if (uid) await updateUserTvProgress(uid, nextIndex, 0);
+    setTvUserState((prev) => prev ? { ...prev, currentIndex: nextIndex, currentSeek: 0 } : prev);
+    if (nextId) tvPlayer.play(nextId, 0);
+  }, [tvUserState, tvVideos, tvPlayer]);
 
-  /* Advance TV video when it ends — show end card with next video ready */
+  /* Advance TV video when it ends — show end card with next video ready.
+     Stops at the end — never wraps back to index 0. */
   const advanceTvVideo = useCallback(() => {
     if (!tvUserState || tvUserState.playlist.length === 0) return;
     // Save progress immediately before showing end card
@@ -735,8 +695,10 @@ export default function DashboardPage() {
     if (uid && lastTvSeekRef.current > 0) {
       updateUserTvProgress(uid, lastTvIndexRef.current, lastTvSeekRef.current);
     }
+    // If on the last video, don't show end card — playlist is complete
+    if (tvUserState.currentIndex >= tvUserState.playlist.length - 1) return;
     // Show end card with the next video info
-    const nextIndex = (tvUserState.currentIndex + 1) % tvUserState.playlist.length;
+    const nextIndex = tvUserState.currentIndex + 1;
     const nextVideo = tvVideos.find((v) => v.id === tvUserState.playlist[nextIndex]) ?? null;
     if (nextVideo) {
       setNextTvVideo(nextVideo);
@@ -744,10 +706,18 @@ export default function DashboardPage() {
     }
   }, [tvUserState, tvVideos]);
 
-  /* Called when user taps "Continue Watching" — advances and plays the next video */
+  /* Called when user taps "Continue Watching" — advances and plays the next video.
+     Stops at the end — never wraps back to index 0. */
   const handleContinueWatching = useCallback(() => {
     if (!tvUserState || tvUserState.playlist.length === 0) return;
-    const nextIndex = (tvUserState.currentIndex + 1) % tvUserState.playlist.length;
+    // If on the last video, don't advance — playlist is complete
+    if (tvUserState.currentIndex >= tvUserState.playlist.length - 1) {
+      setShowEndCard(false);
+      setNextTvVideo(null);
+      return;
+    }
+    const nextIndex = tvUserState.currentIndex + 1;
+    const nextId = tvUserState.playlist[nextIndex];
     const uid = auth.currentUser?.uid;
     if (uid) {
       updateUserTvProgress(uid, nextIndex, 0);
@@ -755,7 +725,8 @@ export default function DashboardPage() {
     setShowEndCard(false);
     setNextTvVideo(null);
     setTvUserState((prev) => prev ? { ...prev, currentIndex: nextIndex, currentSeek: 0 } : prev);
-  }, [tvUserState]);
+    if (nextId) tvPlayer.play(nextId, 0);
+  }, [tvUserState, tvPlayer]);
 
   /* Track current time for periodic Firestore saves */
   const handleTvTimeUpdate = useCallback((time: number) => {
@@ -778,20 +749,15 @@ export default function DashboardPage() {
     });
   }, [advanceTvVideo, handleTvTimeUpdate, tvPlayer]);
 
-  /* Save current progress to Firestore (used by interval + cleanup) */
+  /* Save current progress to Firestore and sync local state.
+     setTvUserState is safe here because the interval effect has stable deps
+     ([saveTvProgress]) — it does NOT restart on state changes. */
   const saveTvProgress = useCallback(() => {
     const uid = auth.currentUser?.uid;
     const seek = lastTvSeekRef.current;
     const index = lastTvIndexRef.current;
-    console.log('[Dashboard TV Progress] Saving:', { uid: uid ? 'logged-in' : 'not-logged-in', index, seek });
     if (uid) {
-      // Always save, even if seek is 0 (important for index changes)
-      updateUserTvProgress(uid, index, seek).then(() => {
-        console.log('[Dashboard TV Progress] Saved successfully');
-      }).catch((err) => {
-        console.error('[Dashboard TV Progress] Failed to save:', err);
-      });
-      // Keep local state in sync so resume props don't lag behind live playback
+      updateUserTvProgress(uid, index, seek).catch(() => {});
       setTvUserState((prev) =>
         prev && (prev.currentIndex !== index || prev.currentSeek !== seek)
           ? { ...prev, currentIndex: index, currentSeek: seek }
@@ -800,16 +766,12 @@ export default function DashboardPage() {
     }
   }, []);
 
-  /* Periodically save seek position (every 5s) */
+  /* Periodically save seek position (every 5s) — stable deps, never restarts mid-session */
   useEffect(() => {
-    if (!tvUserState || !auth.currentUser?.uid) return;
+    if (!auth.currentUser?.uid) return;
     const interval = setInterval(saveTvProgress, 5000);
-    return () => {
-      clearInterval(interval);
-      // Save on unmount/cleanup as well
-      saveTvProgress();
-    };
-  }, [tvUserState?.currentIndex, saveTvProgress]);
+    return () => clearInterval(interval);
+  }, [saveTvProgress]);
 
   /* Save on page unload / tab hide */
   useEffect(() => {
@@ -1048,7 +1010,7 @@ export default function DashboardPage() {
           )}
 
           {/* Start TV button — always visible */}
-          <button className="tv-start-btn" onClick={handleStartTv} title={tvStartCountdown > 0 ? `Ready in ${tvStartCountdown}s` : "Starts TV or skips to next if already playing"} disabled={tvStartCountdown > 0}>
+          <button className="tv-start-btn" onClick={handleStartTv} title={tvStartCountdown > 0 ? `Ready in ${tvStartCountdown}s` : "Skip to next video"} disabled={tvStartCountdown > 0}>
             <i className="fas fa-play"></i>
             <span>{tvStartCountdown > 0 ? `Starting in ${tvStartCountdown}s` : 'Start TV'}</span>
           </button>
@@ -1250,7 +1212,7 @@ export default function DashboardPage() {
                 <div className="st-time">{slot.time}</div>
                 <div className="st-body">
                   <div className={`st-label${slot.isNow ? "" : " upcoming"}`}>{slot.label}</div>
-                  <div className="st-station"><i className="fas fa-radio"></i> {slot.stationName || "MOUNTAIN OF DELIVERANCE CHURCH Radio"}</div>
+                  <div className="st-station"><i className="fas fa-radio"></i> {slot.stationName || "CHRISTIAN REVIVAL CHURCH Radio"}</div>
                 </div>
                 {slot.isNow && <span className="st-now-badge">NOW</span>}
               </div>

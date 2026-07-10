@@ -45,8 +45,9 @@ export async function uploadToBunny(
     headers: {
       AccessKey: BUNNY_API_KEY,
       "Content-Type": contentType,
+      "Content-Length": String(buffer.length),
     },
-    body: buffer as unknown as ReadableStream,
+    body: new Uint8Array(buffer),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -124,35 +125,48 @@ export async function purgeBunnyCache(url?: string): Promise<boolean> {
 }
 
 /**
- * Upload a file directly to BunnyCDN from the client side.
- * Uses Capacitor's native HTTP plugin on Android (bypasses CORS)
- * Falls back to regular fetch on web (will fail due to CORS on direct BunnyCDN API — use Vercel proxy instead).
+ * Upload a file directly to BunnyCDN from the client (no server proxy).
+ * Used on Capacitor native where the static export has no backend.
  */
-export async function uploadToBunnyClient(
+export async function directUploadToBunny(
   file: File,
   churchId: string,
   category: string = "gallery"
 ): Promise<{ cdnUrl: string; fileSize: number; storagePath: string; width: number; height: number }> {
-  const ext = file.name.split(".").pop() || "jpg";
+  const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
   const uuid = crypto.randomUUID();
   const storagePath = `churches/${churchId}/${category}/${uuid}.${ext}`;
-  const url = `https://${CLIENT_BUNNY_STORAGE_HOST}/${CLIENT_BUNNY_STORAGE_ZONE}/${storagePath}`;
-  const headers = {
-    AccessKey: CLIENT_BUNNY_API_KEY,
-    "Content-Type": file.type || "application/octet-stream",
-  };
-  const buffer = await file.arrayBuffer();
 
-  // Use CapacitorHttp (bypasses CORS on Android native)
-  const { CapacitorHttp } = await import("@capacitor/core");
-  const response = await CapacitorHttp.put({
-    url,
-    headers,
-    data: buffer, // CapacitorHttp supports ArrayBuffer natively
+  // Client-side validation (mirrors server)
+  const allowedTypes = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"];
+  const mimeFromExt: Record<string, string> = {
+    jpg: "image/jpeg", jpeg: "image/jpeg",
+    png: "image/png",
+    webp: "image/webp",
+    gif: "image/gif",
+    avif: "image/avif",
+  };
+  const mimeType = file.type || mimeFromExt[ext] || "";
+  if (!allowedTypes.includes(mimeType)) {
+    throw new Error(`Unsupported file type: "${file.type || ext}". Allowed: JPG, PNG, WEBP, GIF, AVIF`);
+  }
+  const maxSize = 10 * 1024 * 1024;
+  if (file.size > maxSize) {
+    throw new Error(`File too large: ${(file.size / 1024 / 1024).toFixed(1)}MB. Max: 10MB`);
+  }
+
+  const url = `https://${CLIENT_BUNNY_STORAGE_HOST}/${CLIENT_BUNNY_STORAGE_ZONE}/${storagePath}`;
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: {
+      AccessKey: CLIENT_BUNNY_API_KEY,
+      "Content-Type": mimeType,
+    },
+    body: file,
   });
-  if (response.status >= 400) {
-    const errMsg = typeof response.data === "string" ? response.data : JSON.stringify(response.data);
-    throw new Error(`BunnyCDN upload failed (${response.status}): ${errMsg}`);
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`BunnyCDN upload failed (${res.status}): ${text}`);
   }
 
   // Detect dimensions client-side (best-effort)
@@ -160,11 +174,11 @@ export async function uploadToBunnyClient(
   let height = 0;
   try {
     const img = new Image();
-    const url = URL.createObjectURL(file);
+    const objectUrl = URL.createObjectURL(file);
     await new Promise<void>((resolve, reject) => {
-      img.onload = () => { width = img.naturalWidth; height = img.naturalHeight; URL.revokeObjectURL(url); resolve(); };
-      img.onerror = () => { URL.revokeObjectURL(url); reject(); };
-      img.src = url;
+      img.onload = () => { width = img.naturalWidth; height = img.naturalHeight; URL.revokeObjectURL(objectUrl); resolve(); };
+      img.onerror = () => { URL.revokeObjectURL(objectUrl); reject(); };
+      img.src = objectUrl;
     });
   } catch {
     // Non-fatal — dimensions default to 0
@@ -180,22 +194,22 @@ export async function uploadToBunnyClient(
 }
 
 /**
- * Shared upload helper that routes to the right upload method based on platform.
- * - On Capacitor (Android APK): uploads directly to BunnyCDN via native HTTP
- * - On web: goes through Vercel proxy
+ * Upload a file — uses direct-to-Bunny when running in Capacitor native (APK),
+ * otherwise falls back to the Vercel server proxy for same-origin safety on web.
  */
 export async function uploadFile(
   file: File,
   churchId: string,
   category: string = "gallery"
 ): Promise<{ cdnUrl: string; fileSize: number; storagePath: string; width: number; height: number }> {
-  const isCapacitor = typeof window !== "undefined" && !!(window as any).Capacitor?.isNative;
-
-  if (isCapacitor) {
-    return uploadToBunnyClient(file, churchId, category);
+  // Detect Capacitor native: use direct upload (no server available in static export)
+  if (typeof window !== "undefined" &&
+      typeof (window as any).Capacitor?.isNativePlatform === "function" &&
+      (window as any).Capacitor.isNativePlatform()) {
+    return directUploadToBunny(file, churchId, category);
   }
 
-  // Web: go through Vercel proxy using apiFetch for proper routing
+  // Web: use the Vercel server proxy
   const { apiFetch } = await import("@/lib/api");
   const formData = new FormData();
   formData.append("file", file);

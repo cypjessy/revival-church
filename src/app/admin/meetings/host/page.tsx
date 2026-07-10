@@ -10,6 +10,8 @@ import PremiumTopBar from "@/components/shared/PremiumTopBar";
 import { getMeeting, updateMeeting, generateLiveKitToken, muteParticipant, unmuteParticipant, updateParticipantMetadata, getAgenda, toggleAgendaItem, getMinutes, saveMinutes, getActionItems, createActionItem, completeActionItem, getAttendance } from "@/lib/meetings";
 import type { Meeting, AgendaItem, ActionItem } from "@/lib/meetings";
 import { Room, RoomEvent, Track } from "livekit-client";
+import { doc, getDoc } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 
 export default function AdminMeetingHostPage() {
   const router = useRouter();
@@ -109,6 +111,7 @@ export default function AdminMeetingHostPage() {
 
       room.on(RoomEvent.ParticipantConnected, (p) => {
         setParticipants((prev) => [...prev.filter((n) => n !== p.identity), p.identity]);
+        lookupParticipantName(p.identity);
       });
 
       room.on(RoomEvent.ParticipantDisconnected, (p) => {
@@ -207,6 +210,8 @@ export default function AdminMeetingHostPage() {
         setHandRaisedParticipants(new Set());
         setHandRaiseQueue(new Map());
         setParticipantMetadata(new Map());
+        setParticipantNames(new Map());
+        lookupInProgressRef.current = new Set();
         setSpeakingTimer(null);
         if (speakingTimerIntervalRef.current) clearInterval(speakingTimerIntervalRef.current);
         speakingTimerIntervalRef.current = null;
@@ -226,6 +231,11 @@ export default function AdminMeetingHostPage() {
       // a proper user gesture on Android WebView.
 
       setMicEnabled(false);
+
+      // Lookup real names for existing participants
+      for (const [, p] of room.remoteParticipants) {
+        lookupParticipantName(p.identity);
+      }
 
       // Scan existing participants for audio tracks and metadata
       for (const [, p] of room.remoteParticipants) {
@@ -294,7 +304,7 @@ export default function AdminMeetingHostPage() {
       await muteParticipant(roomName, pIdentity);
       setAudioParticipants((prev) => { const n = new Map(prev); n.delete(pIdentity); return n; });
       setMutedParticipants((prev) => new Set(prev).add(pIdentity));
-      showToast("Muted", `${pIdentity} microphone closed`, "info", 2500);
+      showToast("Muted", `${getDisplayName(pIdentity)} microphone closed`, "info", 2500);
     } catch (e) {
       showToast("Error", e instanceof Error ? e.message : "Failed to mute", "error", 3000);
     } finally {
@@ -309,7 +319,7 @@ export default function AdminMeetingHostPage() {
     try {
       await unmuteParticipant(roomName, pIdentity);
       setMutedParticipants((prev) => { const n = new Set(prev); n.delete(pIdentity); return n; });
-      showToast("Unmuted", `${pIdentity} can now speak`, "success", 2500);
+      showToast("Unmuted", `${getDisplayName(pIdentity)} can now speak`, "success", 2500);
     } catch (e) {
       showToast("Error", e instanceof Error ? e.message : "Failed to unmute", "error", 3000);
     } finally {
@@ -324,7 +334,7 @@ export default function AdminMeetingHostPage() {
     try {
       await unmuteParticipant(roomName, pIdentity);
       await updateParticipantMetadata(roomName, pIdentity, {});
-      showToast("Approved", `${pIdentity} can now speak`, "success", 2500);
+      showToast("Approved", `${getDisplayName(pIdentity)} can now speak`, "success", 2500);
     } catch (e) {
       showToast("Error", e instanceof Error ? e.message : "Failed to approve", "error", 3000);
     } finally {
@@ -337,7 +347,7 @@ export default function AdminMeetingHostPage() {
     if (!roomName) return;
     try {
       await updateParticipantMetadata(roomName, pIdentity, {});
-      showToast("Dismissed", `${pIdentity} hand raise dismissed`, "info", 2500);
+      showToast("Dismissed", `${getDisplayName(pIdentity)} hand raise dismissed`, "info", 2500);
     } catch (e) {
       showToast("Error", e instanceof Error ? e.message : "Failed to dismiss", "error", 3000);
     }
@@ -431,6 +441,25 @@ export default function AdminMeetingHostPage() {
   };
 
   const [exporting, setExporting] = useState(false);
+  const [participantNames, setParticipantNames] = useState<Map<string, string>>(new Map());
+  const lookupInProgressRef = useRef<Set<string>>(new Set());
+
+  const getDisplayName = (identity: string) => participantNames.get(identity) || identity;
+
+  const lookupParticipantName = async (identity: string) => {
+    if (lookupInProgressRef.current.has(identity)) return;
+    if (identity.startsWith("member-")) return;
+    lookupInProgressRef.current.add(identity);
+    try {
+      const userSnap = await getDoc(doc(db, "users", identity));
+      if (userSnap.exists()) {
+        const name = userSnap.data().display_name || identity;
+        setParticipantNames((prev) => new Map(prev).set(identity, name));
+      }
+    } catch {
+      // Silently fail, fall back to identity
+    }
+  };
 
   const handleExportPDF = async () => {
     if (!meeting) return;
@@ -482,7 +511,7 @@ export default function AdminMeetingHostPage() {
       doc.text(`Host: ${userDoc?.display_name || "Admin"}`, 10, y);
       y += 5;
       participants.forEach((p) => {
-        doc.text(`  ${p}`, 10, y);
+        doc.text(`  ${getDisplayName(p)}`, 10, y);
         y += 4.5;
       });
       y += 4;
@@ -1919,8 +1948,8 @@ export default function AdminMeetingHostPage() {
                     .map(([identity, ts], idx) => (
                       <div key={identity} className={`queue-item ${idx === 0 ? "queue-item-next" : ""}`}>
                         <div className="queue-pos">{idx + 1}</div>
-                        <div className="queue-avatar">{identity.charAt(0).toUpperCase()}</div>
-                        <div className="queue-name">{identity}</div>
+                        <div className="queue-avatar">{getDisplayName(identity).charAt(0).toUpperCase()}</div>
+                        <div className="queue-name">{getDisplayName(identity)}</div>
                         <button className="queue-dismiss" onClick={() => handleDismissHandRaise(identity)}
                           title="Remove from queue">
                           <i className="fas fa-xmark"></i>
@@ -1936,7 +1965,7 @@ export default function AdminMeetingHostPage() {
               <div className="timer-panel">
                 <div className="timer-header">
                   <span className="timer-title"><i className="fas fa-hourglass-half"></i> Speaking</span>
-                  <span className="timer-speaker">{speakingTimer.identity}</span>
+                  <span className="timer-speaker">{getDisplayName(speakingTimer.identity)}</span>
                 </div>
                 <div className="timer-body">
                   <div className="timer-progress-wrap">
@@ -2249,7 +2278,7 @@ export default function AdminMeetingHostPage() {
                       <div key={p} className={`participant-card ${isSpeaking ? "speaking" : ""} ${isHandRaised ? "hand-raised" : ""} ${isMutedAdmin ? "muted-by-admin" : ""}`}>
                         <div className={`participant-avatar ${isSpeaking ? "speaking-ring" : ""} ${isHandRaised ? "hand-raised-ring" : ""}`}
                           style={{ background: avatarBg }}>
-                          {p.charAt(0).toUpperCase()}
+                          {getDisplayName(p).charAt(0).toUpperCase()}
                           {isHandRaised && !isSpeaking && (
                             <div className="avatar-badge">
                               <i className="fas fa-hand"></i>
@@ -2257,7 +2286,7 @@ export default function AdminMeetingHostPage() {
                           )}
                         </div>
                         <div className="participant-info">
-                          <div className="participant-name">{p}</div>
+                          <div className="participant-name">{getDisplayName(p)}</div>
                           <div className="participant-role">{statusText}</div>
                         </div>
                         <div className="participant-actions">

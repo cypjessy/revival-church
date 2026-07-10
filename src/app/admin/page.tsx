@@ -122,7 +122,6 @@ export default function AdminPage() {
   const [tvLoading, setTvLoading] = useState(true);
   const tvPlayer = useTvPlayer();
   const [tvUserState, setTvUserState] = useState<UserTvState | null>(null);
-  const hasInteractedWithTv = useRef(false);
   const [tvStartCountdown, setTvStartCountdown] = useState(20);
   const lastTvSeekRef = useRef(0);
   const lastTvIndexRef = useRef(0);
@@ -137,38 +136,38 @@ export default function AdminPage() {
     tvPlayer.registerTarget(el);
   }, [tvPlayer.registerTarget]);
 
-  // Auto-start TV only when no video is already playing (e.g., first visit).
-  // When switching from TV page, tvPlayer.currentVideoId is already set — no-op.
+  // Play current video when it changes to a different one (initial mount, advancement, page switches).
+  // Does NOT watch seek — avoids re-firing when saveTvProgress updates state.
   useEffect(() => {
-    if (tvCurrentVideo && !tvPlayer.currentVideoId) {
-      tvPlayer.play(tvCurrentVideo.id, tvUserState?.currentSeek || undefined);
+    if (tvCurrentVideo && tvPlayer.currentVideoId !== tvCurrentVideo.id) {
+      tvPlayer.play(tvCurrentVideo.id, tvUserState?.currentSeek || 0);
     }
-  }, [tvCurrentVideo?.id, tvPlayer.currentVideoId, tvPlayer, tvUserState?.currentSeek]);
+  }, [tvCurrentVideo?.id, tvPlayer]);
 
-  // Sync index ref when state changes
+  // Track current seek and index via refs for periodic Firestore saves
+  const handleTvTimeUpdate = useCallback((time: number) => {
+    lastTvSeekRef.current = time;
+  }, []);
+
+  // Keep index ref in sync with state (used by saveTvProgress)
   useEffect(() => {
     if (tvUserState) {
       lastTvIndexRef.current = tvUserState.currentIndex;
     }
   }, [tvUserState?.currentIndex]);
 
-  // Track current seek for periodic Firestore saves
-  const handleTvTimeUpdate = useCallback((time: number) => {
-    lastTvSeekRef.current = time;
-    // Log every 10 seconds to avoid spam
-    if (Math.floor(time) % 10 === 0) {
-      console.log('[Admin Dashboard TV Time Update]', { time, currentIndex: lastTvIndexRef.current });
-    }
-  }, []);
-
   // Advance to next video when current ends
   const handleAdvanceToNext = useCallback(() => {
     if (!tvUserState || tvUserState.playlist.length === 0) return;
-    const nextIndex = (tvUserState.currentIndex + 1) % tvUserState.playlist.length;
+    // If on the last video, don't advance — playlist is complete
+    if (tvUserState.currentIndex >= tvUserState.playlist.length - 1) return;
+    const nextIndex = tvUserState.currentIndex + 1;
+    const nextId = tvUserState.playlist[nextIndex];
     const uid = auth.currentUser?.uid;
     if (uid) updateUserTvProgress(uid, nextIndex, 0);
     setTvUserState((prev) => prev ? { ...prev, currentIndex: nextIndex, currentSeek: 0 } : prev);
-  }, [tvUserState]);
+    if (nextId) tvPlayer.play(nextId, 0);
+  }, [tvUserState, tvPlayer]);
 
   // Keep callbacks in sync with latest versions
   useEffect(() => {
@@ -178,16 +177,15 @@ export default function AdminPage() {
     });
   }, [handleAdvanceToNext, handleTvTimeUpdate, tvPlayer]);
 
-  /* Save current progress to Firestore (used by interval + cleanup) */
+  /* Save current progress to Firestore and sync local state.
+     setTvUserState is safe here because the interval effect has stable deps
+     ([saveTvProgress]) — it does NOT restart on state changes. */
   const saveTvProgress = useCallback(() => {
     const uid = auth.currentUser?.uid;
     const seek = lastTvSeekRef.current;
     const index = lastTvIndexRef.current;
-    console.log('[Admin Dashboard TV Progress] Saving:', { uid, index, seek });
     if (uid) {
-      updateUserTvProgress(uid, index, seek).catch((err) => {
-        console.error('[Admin Dashboard TV Progress] Failed to save:', err);
-      });
+      updateUserTvProgress(uid, index, seek).catch(() => {});
       setTvUserState((prev) =>
         prev && (prev.currentIndex !== index || prev.currentSeek !== seek)
           ? { ...prev, currentIndex: index, currentSeek: seek }
@@ -196,16 +194,12 @@ export default function AdminPage() {
     }
   }, []);
 
-  /* Periodically save seek position (every 5s) */
+  /* Periodically save seek position (every 5s) — stable deps, never restarts mid-session */
   useEffect(() => {
-    if (!tvUserState || !auth.currentUser?.uid) return;
+    if (!auth.currentUser?.uid) return;
     const interval = setInterval(saveTvProgress, 5000);
-    return () => {
-      clearInterval(interval);
-      // Save on unmount/cleanup as well
-      saveTvProgress();
-    };
-  }, [tvUserState?.currentIndex, saveTvProgress]);
+    return () => clearInterval(interval);
+  }, [saveTvProgress]);
 
   /* Save on page unload / tab hide */
   useEffect(() => {
@@ -260,16 +254,18 @@ export default function AdminPage() {
     return () => clearInterval(t);
   }, []);
 
-  /* Start TV — resume saved progress, or advance if already interacted */
-  const handleStartTv = useCallback(() => {
+  /* Start TV — always advances to the next video in the playlist.
+     If no playlist exists yet, auto-initialises one and plays the first video.
+     Progress is saved periodically by the 5s interval once the new video plays. */
+  const handleStartTv = useCallback(async () => {
     if (!tvUserState || tvUserState.playlist.length === 0) {
       const uid = auth.currentUser?.uid;
       if (uid && tvVideos.length > 0) {
-        import("@/lib/youtube").then((yt) => {
-          yt.autoInitUserPlaylist(uid).then((state) => {
-            setTvUserState(state);
-          });
-        });
+        const yt = await import("@/lib/youtube");
+        const state = await yt.autoInitUserPlaylist(uid);
+        setTvUserState(state);
+        const firstId = state.playlist[state.currentIndex];
+        if (firstId) tvPlayer.play(firstId, state.currentSeek || 0);
       } else {
         window.dispatchEvent(new CustomEvent("show-toast", {
           detail: { title: "No Videos", message: "No videos available to play. Sync videos from the admin panel.", type: "info", duration: 3000 }
@@ -277,30 +273,13 @@ export default function AdminPage() {
       }
       return;
     }
+    const nextIndex = (tvUserState.currentIndex + 1) % tvUserState.playlist.length;
+    const nextId = tvUserState.playlist[nextIndex];
     const uid = auth.currentUser?.uid;
-    if (tvCurrentVideo && hasInteractedWithTv.current) {
-      const nextIndex = (tvUserState.currentIndex + 1) % tvUserState.playlist.length;
-      if (uid) updateUserTvProgress(uid, nextIndex, 0);
-      setTvUserState((prev) => prev ? { ...prev, currentIndex: nextIndex, currentSeek: 0 } : prev);
-      return;
-    }
-    hasInteractedWithTv.current = true;
-    const savedIndex = tvUserState.currentIndex;
-    const savedSeek = tvUserState.currentSeek;
-    const savedVideo = tvVideos.find((v) => v.id === tvUserState.playlist[savedIndex]) ?? null;
-    const nearEnd = savedVideo && savedVideo.duration > 0 && savedSeek >= savedVideo.duration * 0.9;
-    if (nearEnd) {
-      const nextIndex = (savedIndex + 1) % tvUserState.playlist.length;
-      if (uid) updateUserTvProgress(uid, nextIndex, 0);
-      setTvUserState((prev) => prev ? { ...prev, currentIndex: nextIndex, currentSeek: 0 } : prev);
-    } else {
-      const resumeIndex = savedSeek > 0 && savedVideo ? savedIndex : 0;
-      const resumeSeek = resumeIndex === savedIndex ? savedSeek : 0;
-      console.log('[Admin Dashboard Start TV] Resuming:', { resumeIndex, resumeSeek, videoTitle: savedVideo?.title });
-      // DON'T write to Firestore on resume - let the interval save actual progress
-      setTvUserState((prev) => prev ? { ...prev, currentIndex: resumeIndex, currentSeek: resumeSeek } : prev);
-    }
-  }, [tvCurrentVideo, tvUserState, tvVideos]);
+    if (uid) await updateUserTvProgress(uid, nextIndex, 0);
+    setTvUserState((prev) => prev ? { ...prev, currentIndex: nextIndex, currentSeek: 0 } : prev);
+    if (nextId) tvPlayer.play(nextId, 0);
+  }, [tvUserState, tvVideos, tvPlayer]);
 
   // Fetch TV channel and videos on mount
   useEffect(() => {
@@ -626,6 +605,31 @@ export default function AdminPage() {
         .dash-onair-badge.off .dash-onair-dot { background: var(--text-tertiary); }
 
         @keyframes livePulse { 0%,100% { opacity:1;transform:scale(1); } 50% { opacity:0.5;transform:scale(1.4); } }
+
+        /* ===== LIVE BANNER ===== */
+        .live-banner {
+            padding: 12px 16px; display: flex; align-items: center; gap: 12px;
+            background: linear-gradient(135deg, rgba(239,68,68,0.1), rgba(239,68,68,0.04));
+            flex-shrink: 0;
+        }
+        .live-banner-left { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+        .live-banner-dot {
+            width: 10px; height: 10px; border-radius: var(--radius-full);
+            background: var(--error); flex-shrink: 0;
+            animation: livePulse 1.5s ease-in-out infinite;
+            box-shadow: 0 0 8px rgba(239,68,68,0.4);
+        }
+        .live-banner-info { min-width: 0; }
+        .live-banner-title { font-size: 13px; font-weight: 700; color: var(--error); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .live-banner-sub { font-size: 11px; color: var(--text-tertiary); margin-top: 1px; }
+        .live-banner-btn {
+            flex-shrink: 0; padding: 8px 16px; border-radius: 20px;
+            background: var(--error); color: #fff; border: none;
+            font-size: 12px; font-weight: 700; cursor: pointer;
+            display: flex; align-items: center; gap: 6px;
+            transition: all 0.15s ease;
+        }
+        .live-banner-btn:active { transform: scale(0.95); opacity: 0.9; }
 
         .dash-listener-count {
             display: flex; align-items: center; gap: 4px;
@@ -1782,7 +1786,7 @@ export default function AdminPage() {
                 </div>
               )}
 
-              <button className="tv-start-btn" onClick={handleStartTv} title={tvStartCountdown > 0 ? `Ready in ${tvStartCountdown}s` : "Starts TV or skips to next if already playing"} disabled={tvStartCountdown > 0}>
+              <button className="tv-start-btn" onClick={handleStartTv} title={tvStartCountdown > 0 ? `Ready in ${tvStartCountdown}s` : "Skip to next video"} disabled={tvStartCountdown > 0}>
                 <i className="fas fa-play"></i>
                 <span>{tvStartCountdown > 0 ? `Starting in ${tvStartCountdown}s` : 'Start TV'}</span>
               </button>

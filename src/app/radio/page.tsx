@@ -8,7 +8,7 @@ import { getNowPlaying, getSongHistory, getSettings, getStreamers, getApiBase, g
 import type { NowPlayingData, SongHistoryItem, StationSettings, Streamer } from "@/lib/azuracast";
 import { churchConfig } from "@/lib/churchConfig";
 import PremiumTopBar from "@/components/shared/PremiumTopBar";
-import RadioEmbed from "@/components/shared/RadioEmbed";
+import { useAudio } from "@/lib/audio/AudioContext";
 
 export default function RadioPage() {
   const router = useRouter();
@@ -69,7 +69,30 @@ export default function RadioPage() {
   const liveStreamerName = npData?.live?.streamerName;
   const currentListeners = npData?.listeners?.current ?? 0;
 
+  const streamUrl = npData?.station?.listenUrl || `${getApiBase()}/listen/${getStationId()}/radio.mp3`;
+
   const activeStreamers = streamers.filter((s) => s.isLive);
+
+  const audio = useAudio();
+  const isRadioPlaying = audio.isPlaying && audio.currentStreamUrl === streamUrl;
+
+  const handleTogglePlay = () => {
+    if (!streamUrl) {
+      window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Unavailable", message: "Stream URL is not available", type: "error", duration: 3000 } }));
+      return;
+    }
+    audio.toggle(streamUrl, Number(getStationId()));
+  };
+
+  // Sync Android notification with now-playing metadata (keeps audio alive in background)
+  useEffect(() => {
+    if (isRadioPlaying && np) {
+      const title = np.song?.title || stationName;
+      const artist = np.song?.artist || stationName;
+      const albumArt = np.song?.albumArt || undefined;
+      audio.updateMediaSession(title, artist, albumArt);
+    }
+  }, [isRadioPlaying, np?.song?.title, np?.song?.artist, np?.song?.albumArt, audio.updateMediaSession, stationName]);
 
   return (
     <>
@@ -327,12 +350,67 @@ export default function RadioPage() {
         <div className="content-scroll">
           <div className="content-inner">
               <div className="section-spacer">
-                {/* Now Playing — Premium AzuraCast Embedded Player */}
-                <div className="np-glass" style={{ padding: 0, overflow: 'hidden' }}>
-                  <RadioEmbed
-                    src="https://azuracast.histoview.co.ke/public/mountain_of_delivarance_church/embed?autoplay=1&rounded=1&allow_popup=1&continuous=1"
-                    title="MOUNTAIN OF DELIVERANCE CHURCH Radio Player"
-                  />
+                {/* Now Playing — Native Audio Player (plays in background on Android) */}
+                <div className="np-glass">
+                  <div className="np-row">
+                    <div className="np-art">
+                      {np?.song?.albumArt ? (
+                        <img src={np.song.albumArt} alt="" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                      ) : (
+                        <div className="np-art-fallback">
+                          <i className="fas fa-radio"></i>
+                        </div>
+                      )}
+                    </div>
+                    <div className="np-body">
+                      <div className="np-title">{np?.song?.title || "Station Offline"}</div>
+                      <div className="np-artist">{np?.song?.artist || (streamUrl ? "Tap play to start" : "Not available")}</div>
+                      <div className="np-progress">
+                        <div className="np-progress-bar">
+                          <div
+                            className="np-progress-fill"
+                            style={{
+                              width: np?.duration && np?.elapsed
+                                ? `${(np.elapsed / np.duration) * 100}%`
+                                : isRadioPlaying ? "60%" : "0%"
+                            }}
+                          ></div>
+                        </div>
+                        <div className="np-progress-time">
+                          <span>{isRadioPlaying ? "Live" : "Paused"}</span>
+                          <span>{currentListeners > 0 ? `${currentListeners} listening` : ""}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="np-controls-row">
+                    <button
+                      className={`np-play-btn${isRadioPlaying ? " playing" : ""}`}
+                      onClick={handleTogglePlay}
+                      disabled={!streamUrl}
+                    >
+                      <i className={`fas ${isRadioPlaying ? "fa-pause" : "fa-play"}`}></i>
+                    </button>
+                    <div className="np-vol-wrap">
+                      <i className="fas fa-volume-down"></i>
+                      <input
+                        className="np-vol-slider"
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                        value={audio.volume}
+                        onChange={(e) => audio.setVolume(parseFloat(e.target.value))}
+                      />
+                      <i className="fas fa-volume-up"></i>
+                    </div>
+                  </div>
+                  <div className="np-bg-indicator">
+                    <i className="fas fa-circle" style={{ fontSize: 8, color: isRadioPlaying ? "var(--success)" : "var(--text-tertiary)" }}></i>
+                    {isRadioPlaying
+                      ? "Playing in background — exit the app and audio will continue"
+                      : streamUrl ? "Tap play to listen in background" : "Station unavailable"}
+                  </div>
                 </div>
 
                 {/* Live DJ */}

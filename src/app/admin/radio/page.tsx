@@ -29,7 +29,8 @@ import { hapticSuccess } from "@/lib/haptics";
 import { getRadioConfig, defaultRadioConfig } from "@/lib/radioConfig";
 import type { Playlist, StationFile, QueueItem } from "@/lib/azuracast";
 import dynamic from "next/dynamic";
-import RadioEmbed from "@/components/shared/RadioEmbed";
+import { useAudio } from "@/lib/audio/AudioContext";
+
 
 const RadioOverviewTab = dynamic(() => import("@/components/admin/radio/tabs/RadioOverviewTab").then(m => m.RadioOverviewTab), { ssr: false });
 const RadioMediaTab = dynamic(() => import("@/components/admin/radio/tabs/RadioMediaTab").then(m => m.RadioMediaTab), { ssr: false });
@@ -63,7 +64,7 @@ export default function AdminRadioPage() {
   useEffect(() => {
     getRadioConfig().then((config) => {
       if (config) setRadioConfig({
-        stationName: config.stationName || "MOUNTAIN OF DELIVERANCE CHURCH Radio",
+        stationName: config.stationName || "CHRISTIAN REVIVAL CHURCH Radio",
         description: config.description || "Radio Station",
         stationId: config.stationId || "4",
         embedUrl: config.embedUrl || "https://azuracast.histoview.co.ke/public/mountain_of_delivarance_church/embed?autoplay=1&rounded=1&allow_popup=1&continuous=1",
@@ -87,6 +88,29 @@ export default function AdminRadioPage() {
   const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
   const [dragging, setDragging] = useState(false);
   const [playlistPickerOpen, setPlaylistPickerOpen] = useState(false);
+
+  const audio = useAudio();
+  const streamUrl = overviewNP?.station?.listenUrl || radioConfig.streamUrl || `${getApiBase()}/listen/${getStationId()}/radio.mp3`;
+  const isRadioPlaying = audio.isPlaying && audio.currentStreamUrl === streamUrl;
+
+  const handleTogglePlay = () => {
+    if (!streamUrl) {
+      window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Unavailable", message: "Stream URL is not available", type: "error", duration: 3000 } }));
+      return;
+    }
+    audio.toggle(streamUrl, Number(getStationId()));
+  };
+
+  // Sync Android notification with now-playing metadata (keeps audio alive in background)
+  useEffect(() => {
+    if (isRadioPlaying && overviewNP?.nowPlaying) {
+      const np = overviewNP.nowPlaying;
+      const title = np.song?.title || radioConfig.stationName;
+      const artist = np.song?.artist || radioConfig.stationName;
+      const albumArt = np.song?.albumArt || undefined;
+      audio.updateMediaSession(title, artist, albumArt);
+    }
+  }, [isRadioPlaying, overviewNP?.nowPlaying?.song?.title, overviewNP?.nowPlaying?.song?.artist, overviewNP?.nowPlaying?.song?.albumArt, audio.updateMediaSession, radioConfig.stationName]);
 
   const [backendRunning, setBackendRunning] = useState(false);
 
@@ -1725,12 +1749,58 @@ export default function AdminRadioPage() {
           </div>
         </header>
 
-        {/* ========== AZURACAST EMBEDDED PLAYER ========== */}
-        <div style={{ margin: "8px 16px 0" }}>
-          <RadioEmbed
-            src="https://azuracast.histoview.co.ke/public/mountain_of_delivarance_church/embed?autoplay=1&rounded=1&allow_popup=1&continuous=1"
-            title="MOUNTAIN OF DELIVERANCE CHURCH Radio Player"
-          />
+        {/* ========== PREMIUM NATIVE PLAYER (background playback support) ========== */}
+        <div className="rh-hero" style={{ margin: "8px 16px 0", padding: "16px" }}>
+          <div className="rh-glow-1"></div>
+          <div className="rh-glow-2"></div>
+          <div className="rh-top">
+            <div className="rh-station">
+              <i className="fas fa-tower-broadcast"></i>
+              <span>{overviewNP?.station?.name || radioConfig.stationName}</span>
+            </div>
+            <div className="rh-badges">
+              <div className={`rh-live-badge ${isRadioPlaying ? "live" : "off"}`}>
+                <span className="rh-live-dot"></span>
+                {isRadioPlaying ? "Playing" : "Off"}
+              </div>
+            </div>
+          </div>
+          <div className="rh-main" style={{ marginBottom: 8 }}>
+            <div className="rh-art-wrap" style={{ width: 72, height: 72 }}>
+              <div className="rh-art-ring" style={{ display: "none" }}></div>
+              <div className={`rh-art ${isRadioPlaying ? "spinning" : ""}`}>
+                {overviewNP?.nowPlaying?.song?.albumArt ? (
+                  <img src={overviewNP.nowPlaying.song.albumArt} alt="" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                ) : (
+                  <div className="rh-art-fallback" style={{ fontSize: 28 }}>
+                    <i className="fas fa-radio"></i>
+                  </div>
+                )}
+              </div>
+              {isRadioPlaying && <div className="rh-eq"><span></span><span></span><span></span><span></span></div>}
+            </div>
+            <div className="rh-info">
+              <div className="rh-track-name" style={{ fontSize: 16 }}>{overviewNP?.nowPlaying?.song?.title || "Station Offline"}</div>
+              <div className="rh-track-artist" style={{ fontSize: 13 }}>{overviewNP?.nowPlaying?.song?.artist || "Not currently playing"}</div>
+            </div>
+            <button
+              className={`rh-play-btn ${isRadioPlaying ? "playing" : ""}`}
+              onClick={handleTogglePlay}
+              disabled={!streamUrl}
+              title={isRadioPlaying ? "Pause" : "Listen Live"}
+            >
+              <i className={`fas ${isRadioPlaying ? "fa-pause" : "fa-play"}`}></i>
+              <div className="rh-play-ring"></div>
+            </button>
+          </div>
+          <div className="rh-actions-row" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div className="rh-source" style={{ fontSize: 10 }}>
+              <i className="fas fa-radio"></i> {isRadioPlaying ? "Playing in background" : "Tap play to listen"}
+            </div>
+            <div className="rh-listener-badge">
+              <i className="fas fa-headphones"></i> {listeners}
+            </div>
+          </div>
         </div>
 
         {/* ========== TAB BAR ========== */}
